@@ -1,0 +1,5 @@
+services:
+  gateway:
+    ports: !override
+      - "8081:80"
+      - "8083:443"
