@@ -4,8 +4,9 @@ WORKDIR /app
 COPY package*.json ./
 COPY apps/web/package.json apps/web/package.json
 COPY apps/validator/package.json apps/validator/package.json
-RUN npm ci
-RUN npx playwright install --with-deps chromium && chmod -R a+rX /opt/browsers
+RUN npm ci --registry=https://registry.npmmirror.com
+ENV PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright
+RUN sed -i -e "s@deb.debian.org/debian-security@mirrors.aliyun.com/debian-security@g" -e "s@security.debian.org/debian-security@mirrors.aliyun.com/debian-security@g" -e "s@deb.debian.org/debian@mirrors.aliyun.com/debian@g" /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list; npx playwright install --with-deps chromium && chmod -R a+rX /opt/browsers
 COPY shared shared
 COPY apps/validator apps/validator
 RUN npm run build -w @atoms/validator

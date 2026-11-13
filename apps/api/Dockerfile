@@ -2,8 +2,9 @@ FROM python:3.12-slim@sha256:b18b261e1b4974b4f321451ad5251ded85abb22c2b8b262da52
 ARG UV_SYNC_EXTRAS
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 UV_LINK_MODE=copy
 WORKDIR /app/apps/api
-RUN pip install --no-cache-dir uv==0.13.7
+RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ uv==0.13.7
 COPY apps/api/pyproject.toml apps/api/uv.lock ./
+ENV UV_DEFAULT_INDEX=https://mirrors.aliyun.com/pypi/simple/
 RUN uv sync --frozen --no-dev ${UV_SYNC_EXTRAS}
 ENV PATH="/app/apps/api/.venv/bin:$PATH"
 COPY apps/api ./
