@@ -1,10 +1,9 @@
-"""Vidu Q3 native video API. Paid submissions are never blindly retried."""
-import asyncio
+"""Vidu Q3 native video API. Each paid submission is sent once."""
 import re
 
 import httpx
 
-from .model import ModelError
+from .provider_contract import ModelError
 
 TASK_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 STATES = {"created","queueing","processing","success","failed"}
@@ -14,7 +13,7 @@ class ViduClient:
     def __init__(self, api_key, base_url="https://api.vidu.cn", *, transport=None):
         self.http = httpx.AsyncClient(base_url=base_url.rstrip("/"),
             headers={"Authorization":"Token "+api_key,"Content-Type":"application/json"},
-            timeout=httpx.Timeout(60,connect=15),follow_redirects=False,transport=transport)
+            timeout=httpx.Timeout(60,connect=15),follow_redirects=False,trust_env=False,transport=transport)
 
     async def __aenter__(self):
         return self
@@ -47,19 +46,17 @@ class ViduClient:
             "aspect_ratio":"16:9","duration":duration,"resolution":resolution,"audio":bool(audio),"off_peak":False,"payload":payload})
 
     async def _submit(self,endpoint,body):
-        for attempt in range(3):
-            try:
-                response=await self.http.post(endpoint,json=body)
-            except httpx.HTTPError:
-                raise ModelError("VIDU_SUBMISSION_UNCERTAIN","提交结果待核对，暂不重复扣费，请联系管理员",uncertain=True) from None
-            if response.status_code==429 and attempt<2:
-                await asyncio.sleep(2**attempt)
-                continue
-            value=self.parse(response,submitting=True)
-            task_id=value.get("task_id")
-            if not isinstance(task_id,str) or not TASK_ID.fullmatch(task_id):
-                raise ModelError("VIDU_SUBMISSION_UNCERTAIN","生成请求的结果待核对，请联系管理员",uncertain=True)
-            return task_id
+        try:
+            response=await self.http.post(endpoint,json=body)
+        except (httpx.ConnectError,httpx.ConnectTimeout,httpx.PoolTimeout):
+            raise ModelError("VIDU_REQUEST_FAILED","暂未连接到视频服务，请稍后重试") from None
+        except httpx.HTTPError:
+            raise ModelError("VIDU_SUBMISSION_UNCERTAIN","提交结果待核对，暂不重复扣费，请联系管理员",uncertain=True) from None
+        value=self.parse(response,submitting=True)
+        task_id=value.get("task_id")
+        if not isinstance(task_id,str) or not TASK_ID.fullmatch(task_id):
+            raise ModelError("VIDU_SUBMISSION_UNCERTAIN","生成请求的结果待核对，请联系管理员",uncertain=True)
+        return task_id
 
     async def query(self,task_id):
         if not TASK_ID.fullmatch(task_id):

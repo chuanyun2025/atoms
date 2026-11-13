@@ -13,7 +13,7 @@ from atoms.db import transaction,one,execute
 from atoms.security import uid
 from atoms.credits import reserve_call,settle_call,finish_unbilled,CreditError
 from atoms.worker import claim,paid_generate,recover_expired
-from atoms.model import ModelError,Prepared,generate,native_output_limit,_capabilities
+from atoms.model import ModelError,Prepared,generate
 from atoms.skills import skill_for
 from conftest import create_project,submit
 
@@ -114,21 +114,21 @@ def test_worker_usage_failure_and_holds(client,monkeypatch,scenario):
     original=httpx.AsyncClient
     config=settings()
     monkeypatch.setattr(config,"test_fixture",False)
-    monkeypatch.setattr(config,"llm_base_url","https://api.deepseek.com")
-    monkeypatch.setattr(config,"llm_model","deepseek-flash")
-    monkeypatch.setattr(config,"llm_api_key","unit-test-key")
-    _capabilities.clear()
     def handler(request):
         if request.method=="GET":
-            return httpx.Response(200,json={"data":[{"id":"deepseek-flash","max_output_tokens":393216}]})
-        assert json.loads(request.content)["max_tokens"]==393216
+            return httpx.Response(200,json={"max_output_tokens":393216})
+        assert json.loads(request.content)["max_output_tokens"]==393216
         if scenario=="timeout":raise httpx.ReadTimeout("test",request=request)
         if scenario=="connect":raise httpx.ConnectError("test",request=request)
-        if scenario=="rejected":return httpx.Response(401)
-        result={"id":"test-response","choices":[{"message":{"content":"{}"},"finish_reason":"length" if scenario=="length" else "stop"}]}
-        if scenario!="missing":result["usage"]={"prompt_tokens":1200,"completion_tokens":400}
+        if scenario=="rejected":
+            return httpx.Response(401,json={"error":{"code":"MODEL_AUTH","message":"authentication failed","uncertain":False}})
+        usage={"input_tokens":1200,"output_tokens":400}
+        if scenario=="length":
+            return httpx.Response(502,json={"error":{"code":"MODEL_TRUNCATED","message":"output truncated","usage":usage}})
+        result={"content":"{}"}
+        if scenario!="missing":result["usage"]=usage
         return httpx.Response(200,json=result)
-    monkeypatch.setattr(httpx,"AsyncClient",lambda **kwargs:original(transport=httpx.MockTransport(handler)))
+    monkeypatch.setattr(httpx,"AsyncClient",lambda **kwargs:original(**{**kwargs, 'transport':httpx.MockTransport(handler)}))
     generation=paid_generate(run,{"request":"计数器"},None,skill=skill_for("web"))
     if scenario=="success":
         assert asyncio.run(generation)=="{}"

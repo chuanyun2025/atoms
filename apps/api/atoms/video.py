@@ -15,7 +15,7 @@ from .db import transaction, one, execute, compact
 from .media import asset_path, store_asset, MAX_VIDEO_BYTES
 from .model import ModelError
 from .security_ids import uid
-from .vidu import ViduClient
+from .provider_client import ProviderClient
 from . import media_credits
 
 
@@ -122,7 +122,7 @@ async def poll_result(run,provider,task_id,call_id):
     previous=None
     while True:
         try:
-            result=await provider.query(task_id)
+            result=await provider.query_video(task_id,run_id=run["id"])
             failures=0
         except ModelError as error:
             if error.code not in {"VIDU_POLL_RETRY","VIDU_INVALID_RESPONSE"} or failures>=8:
@@ -140,9 +140,8 @@ async def poll_result(run,provider,task_id,call_id):
             checkpoint(run,provider_credits=actual if type(actual) is int else None)
             # Generation is billable even when downloading later needs recovery.
             call_change(run,call_id,"settle",actual)
-            creations=result.get("creations")
-            if isinstance(creations,list) and creations and isinstance(creations[0],dict) and isinstance(creations[0].get("url"),str):
-                return creations[0]["url"]
+            if isinstance(result.get("video_url"),str):
+                return result["video_url"]
             if empty>=3:
                 raise ModelError("VIDU_RESULT_MISSING","视频已生成，暂未获取到文件，可以继续原任务")
             empty+=1
@@ -162,7 +161,7 @@ async def acquire_result(run,job,provider):
     if not task:
         stage(run["id"],run["lease_token"],"video_submitting","正在提交视频任务")
         try:
-            options=dict(prompt=run["prompt"],model=job["model"],resolution=job["resolution"],
+            options=dict(prompt=run["prompt"],expected_model=job["model"],resolution=job["resolution"],
                          duration=job["duration"],audio=job["audio"],payload=run["id"])
             if job["image_asset_id"]:
                 with transaction() as conn:
@@ -170,9 +169,9 @@ async def acquire_result(run,job,provider):
                 if not asset or not asset_path(asset).is_file():
                     raise ModelError("VIDEO_INPUT_MISSING","参考图片暂不可用，请重新上传")
                 data="data:"+asset["mime_type"]+";base64,"+base64.b64encode(asset_path(asset).read_bytes()).decode()
-                task=await provider.create(image=data,**options)
+                task=await provider.submit_video(image=data,**options)
             else:
-                task=await provider.create_text(**options)
+                task=await provider.submit_video(**options)
         except ModelError as error:
             if not error.uncertain:
                 call_change(run,job["video_call_id"],"release",error.code)
@@ -212,7 +211,7 @@ async def execute_video(run,context):
             call_change(run,job["video_call_id"],"settle",actual)
             checkpoint(run,output_asset_id=result["id"],phase="success",provider_credits=actual)
         else:
-            async with ViduClient(cfg.vidu_api_key,cfg.vidu_base_url) as provider:
+            async with ProviderClient() as provider:
                 job["output_asset_id"]=await acquire_result(run,job,provider)
                 checkpoint(run,output_asset_id=job["output_asset_id"],phase="success")
     with transaction() as conn:

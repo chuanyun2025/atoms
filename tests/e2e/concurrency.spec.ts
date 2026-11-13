@@ -1,6 +1,6 @@
 import {expect, test} from "@playwright/test";
 
-test("同一访客可并行构建三个项目，超出上限的任务在腾出名额后启动", async ({request, baseURL}) => {
+test("默认单槽 Worker 按提交顺序依次构建项目", async ({request, baseURL}) => {
   const origin = new URL(baseURL!).origin;
   const headers = {Origin:origin, "X-App-Request":"atoms"};
   const session = await request.post("/api/v1/session", {data:{},headers});
@@ -11,7 +11,7 @@ test("同一访客可并行构建三个项目，超出上限的任务在腾出�
   async function submit(projectId: string, index: number) {
     return request.post(`/api/v1/projects/${projectId}/runs`, {
       headers:{...auth, "Idempotency-Key":`concurrent-run-${index}`},
-      data:{prompt:index===2?"制作两页幻灯片":"[slow] 生成两页幻灯片",expected_revision:0,base_version_id:null},
+      data:{prompt:index===0?"[slow] 生成两页幻灯片":"制作两页幻灯片",expected_revision:0,base_version_id:null},
     });
   }
 
@@ -41,12 +41,13 @@ test("同一访客可并行构建三个项目，超出上限的任务在腾出�
     }));
   }
   await expect.poll(async ()=>(await states()).map(run=>run.status), {intervals:[100],timeout:5000})
-    .toEqual(["running","running","running","pending"]);
-  await expect.poll(async ()=>(await states()).map(run=>run.status), {intervals:[200],timeout:15000})
+    .toEqual(["running","pending","pending","pending"]);
+  await expect.poll(async ()=>(await states()).map(run=>run.status), {intervals:[200],timeout:25000})
     .toEqual(["succeeded","succeeded","succeeded","succeeded"]);
   const [first,second,third,fourth] = await states();
+  expect(second.started_at).toBeGreaterThanOrEqual(first.finished_at);
+  expect(third.started_at).toBeGreaterThanOrEqual(second.finished_at);
   expect(fourth.started_at).toBeGreaterThanOrEqual(third.finished_at);
-  expect(fourth.started_at).toBeLessThan(Math.min(first.finished_at,second.finished_at));
   expect([first,second,third,fourth].map(run=>run.model_calls)).toEqual([1,1,1,1]);
   const wallet = await (await request.get("/api/v1/wallet")).json();
   expect(wallet).toMatchObject({available:"499.776000",held:"0.000000"});

@@ -11,9 +11,6 @@ x-api: &api
     SERVICE_TOKEN: ${SERVICE_TOKEN:?Run scripts/init_env.py}
     DATABASE_URL: sqlite:////var/lib/atoms/atoms.db
     VALIDATOR_URL: http://validator:9000
-    LLM_MODEL: ${LLM_MODEL:-}
-    VIDU_API_KEY: ${VIDU_API_KEY:-}
-    VIDU_BASE_URL: ${VIDU_BASE_URL:-https://api.vidu.cn}
     VIDU_MODEL: ${VIDU_MODEL:-viduq3-pro}
     VIDU_RESOLUTION: ${VIDU_RESOLUTION:-540p}
     VIDU_POLL_SECONDS: ${VIDU_POLL_SECONDS:-5}
@@ -50,22 +47,59 @@ services:
     command: ["python","-m","atoms.worker"]
     environment:
       <<: *environment
-      RUN_CONCURRENCY: ${RUN_CONCURRENCY:-3}
+      RUN_CONCURRENCY: ${RUN_CONCURRENCY:-1}
+      PROVIDER_GATEWAY_URL: http://provider-gateway:8100
+      PROVIDER_GATEWAY_TOKEN: ${PROVIDER_GATEWAY_TOKEN:?Run scripts/init_env.py}
+      PROVIDER_GATEWAY_TIMEOUT_SECONDS: ${PROVIDER_GATEWAY_TIMEOUT_SECONDS:-1510}
+      TEST_FIXTURE: ${TEST_FIXTURE:-false}
+    networks: [backend,provider,egress]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      validator:
+        condition: service_healthy
+      provider-gateway:
+        condition: service_healthy
+    stop_grace_period: 30s
+  provider-gateway:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      args:
+        UV_SYNC_EXTRAS: --extra kms
+    command: ["uvicorn","atoms.provider_gateway:app","--host","0.0.0.0","--port","8100","--no-access-log"]
+    environment:
+      PROVIDER_GATEWAY_TOKEN: ${PROVIDER_GATEWAY_TOKEN:?Run scripts/init_env.py}
+      PROVIDER_MAX_CONCURRENCY: ${PROVIDER_MAX_CONCURRENCY:-3}
+      PROVIDER_REQUESTS_PER_MINUTE: ${PROVIDER_REQUESTS_PER_MINUTE:-120}
       LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_MODEL: ${LLM_MODEL:-}
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_RESPONSE_MODE: ${LLM_RESPONSE_MODE:-text}
       LLM_THINKING_MODE: ${LLM_THINKING_MODE:-}
       LLM_TOKEN_LIMIT_PARAM: ${LLM_TOKEN_LIMIT_PARAM:-max_tokens}
       LLM_PROVIDER_MAX_OUTPUT_TOKENS: ${LLM_PROVIDER_MAX_OUTPUT_TOKENS:-393216}
       LLM_REQUEST_TIMEOUT_SECONDS: ${LLM_REQUEST_TIMEOUT_SECONDS:-1500}
-      TEST_FIXTURE: ${TEST_FIXTURE:-false}
-    networks: [backend,egress]
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-      validator:
-        condition: service_healthy
-    stop_grace_period: 30s
+      VIDU_API_KEY: ${VIDU_API_KEY:-}
+      VIDU_BASE_URL: ${VIDU_BASE_URL:-https://api.vidu.cn}
+      VIDU_MODEL: ${VIDU_MODEL:-viduq3-pro}
+      PROVIDER_KMS_REGION: ${PROVIDER_KMS_REGION:-}
+      PROVIDER_KMS_ENDPOINT: ${PROVIDER_KMS_ENDPOINT:-}
+      PROVIDER_KMS_ROLE: ${PROVIDER_KMS_ROLE:-}
+      LLM_KMS_SECRET_NAME: ${LLM_KMS_SECRET_NAME:-}
+      VIDU_KMS_SECRET_NAME: ${VIDU_KMS_SECRET_NAME:-}
+    networks: [provider,provider_egress]
+    init: true
+    read_only: true
+    tmpfs: [/tmp]
+    restart: unless-stopped
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    healthcheck:
+      test: ["CMD","python","-c","import urllib.request; urllib.request.urlopen('http://localhost:8100/health/live')"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
   validator:
     build:
       context: .
@@ -108,6 +142,9 @@ services:
 networks:
   backend:
     internal: true
+  provider:
+    internal: true
+  provider_egress: {}
   egress: {}
   ingress: {}
 volumes:

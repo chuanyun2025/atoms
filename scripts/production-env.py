@@ -1,6 +1,7 @@
 """Prepare ignored production env with fresh random server secrets."""
 from pathlib import Path
 import secrets
+from provider_gateway_token import ensure_gateway_token
 root=Path(__file__).resolve().parents[1]
 target=root/".env.production"
 if not target.exists():
@@ -11,3 +12,4 @@ if not target.exists():
     print("已生成 .env.production。请填写真实域名、模型密钥；随机服务密钥未输出。")
 else:
     print(".env.production 已存在，已保留。")
+ensure_gateway_token(target)

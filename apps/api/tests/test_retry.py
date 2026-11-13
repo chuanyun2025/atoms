@@ -69,7 +69,7 @@ def test_failed_work_is_saved_and_next_repair_uses_it(client,monkeypatch):
     }}
     outputs=iter(['{"bad":"first"}','{"bad":"last"}',compact(react_artifact)])
     prompts=[]
-    async def generated(prepared,output_limit):
+    async def generated(prepared,output_limit,**kwargs):
         prompts.append(prepared.messages)
         return ModelResult(next(outputs),Usage(1200,400,"test-call-"+str(len(prompts))))
     monkeypatch.setattr(worker,"generate",generated)

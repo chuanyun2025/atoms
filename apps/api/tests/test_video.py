@@ -12,6 +12,7 @@ from atoms.db import all_rows, one, transaction, execute
 from atoms.media import store_asset
 from atoms.model import ModelError
 from atoms.vidu import ViduClient
+from atoms.provider_client import ProviderClient
 
 FIXTURES=Path(__file__).resolve().parents[3]/"shared"/"test-fixtures"
 PROMPT="微风吹过，镜头缓缓拉远"
@@ -67,9 +68,8 @@ def test_video_input_validation_and_configuration(client,monkeypatch):
     invalid=client.post(f"/api/v1/projects/{project['id']}/media/images",json={"data_url":"data:image/png;base64,"+base64.b64encode(b"this is not a PNG image").decode()})
     assert invalid.status_code==422
     assert start(client,project,video={"image_asset_id":image["id"],"duration":17}).status_code==422
-    cfg=settings()
-    monkeypatch.setattr(cfg,"test_fixture",False)
-    monkeypatch.setattr(cfg,"vidu_api_key","")
+    with transaction(True) as conn:
+        execute(conn,"UPDATE worker_status SET video_configured=0")
     missing=start(client,project,image)
     assert missing.status_code==503
     assert missing.json()["detail"]["code"]=="video_not_configured"
@@ -120,13 +120,12 @@ def test_resume_queries_existing_provider_task_without_resubmission(client,monke
     assert response.status_code==202,response.text
     cfg=settings()
     monkeypatch.setattr(cfg,"test_fixture",False)
-    monkeypatch.setattr(cfg,"vidu_api_key","test-key")
     calls=[]
     def transport(request):
         calls.append(request)
-        assert request.method=="GET" and request.url.path.endswith("/existing-task/creations")
-        return httpx.Response(200,json={"state":"success","credits":10,"creations":[{"url":"https://cdn.example.com/result.mp4"}]})
-    monkeypatch.setattr(video,"ViduClient",lambda *args:ViduClient("test-key",transport=httpx.MockTransport(transport)))
+        assert request.method=="GET" and request.url.path=="/internal/v1/video/tasks/existing-task"
+        return httpx.Response(200,json={"state":"success","credits":10,"video_url":"https://cdn.example.com/result.mp4"})
+    monkeypatch.setattr(video,"ProviderClient",lambda:ProviderClient(transport=httpx.MockTransport(transport)))
     async def download(run,url):
         with transaction(True) as conn:
             return store_asset(conn,run["project_id"],(FIXTURES/"video.mp4").read_bytes(),"video/mp4")["id"]
@@ -154,7 +153,7 @@ def test_backup_and_offline_restore_include_native_media(client,monkeypatch,tmp_
     backup=tmp_path/"video-backup.db"
     monkeypatch.setattr(sys,"argv",["ops","backup",str(backup)])
     ops.main()
-    assert ops.inspect_backup(backup)["schema"]=="0007"
+    assert ops.inspect_backup(backup)["schema"]=="0008"
     with transaction(True) as conn:
         asset=one(conn,"SELECT * FROM media_assets WHERE project_id=:pid AND mime_type='video/mp4'",pid=project["id"])
         execute(conn,"UPDATE worker_status SET lease_until=0")

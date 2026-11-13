@@ -1,5 +1,6 @@
 from pathlib import Path
 import secrets
+from provider_gateway_token import ensure_gateway_token
 
 root = Path(__file__).resolve().parents[1]
 target = root / ".env.test"
@@ -11,3 +12,4 @@ if not target.exists():
         encoding="utf-8"
     )
 print("独立测试环境配置已就绪，使用 atoms-e2e 独立项目和数据卷。")
+ensure_gateway_token(target)

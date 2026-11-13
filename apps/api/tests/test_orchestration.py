@@ -149,7 +149,7 @@ def test_saved_plan_survives_recheck_failure_and_runtime_repair(client,monkeypat
     source=failed_candidate(client,project,compact(artifact))
     assert retry(client,project,source).status_code==202
     run=worker.claim("test-leader")
-    async def generated(prepared,output_limit):
+    async def generated(prepared,output_limit,**kwargs):
         assert prepared.decision_role is None
         context=json.loads(prepared.messages[1]["content"])
         assert context["task_plan"]["experience"]=="website"
@@ -173,19 +173,15 @@ def test_planner_and_review_calls_are_separately_accounted(client,monkeypatch):
     run=worker.claim("test-leader")
     config=settings()
     monkeypatch.setattr(config,"test_fixture",False)
-    monkeypatch.setattr(config,"llm_base_url","https://api.deepseek.com")
-    monkeypatch.setattr(config,"llm_model","test-model")
-    monkeypatch.setattr(config,"llm_api_key","test-api-key")
     monkeypatch.setattr(worker,"agent_decision",real_agent_decision)
     original=httpx.AsyncClient
     results=iter([plan().model_dump(),{"accepted":False,"findings":[{"path":"src/App.tsx","excerpt":"const camera = null","problem":"按方向键无法移动镜头"}]}])
     def handle(request):
         if request.method=="GET":
-            return httpx.Response(200,json={"data":[]})
+            return httpx.Response(200,json={"max_output_tokens":4096})
         content=json.dumps(next(results),ensure_ascii=False)
-        return httpx.Response(200,json={"choices":[{"finish_reason":"stop","message":{"content":content}}],
-                                      "usage":{"prompt_tokens":300,"completion_tokens":120}})
-    monkeypatch.setattr(httpx,"AsyncClient",lambda **kwargs:original(transport=httpx.MockTransport(handle)))
+        return httpx.Response(200,json={"content":content,"usage":{"input_tokens":300,"output_tokens":120}})
+    monkeypatch.setattr(httpx,"AsyncClient",lambda **kwargs:original(**{**kwargs, 'transport':httpx.MockTransport(handle)}))
     first=asyncio.run(real_agent_decision(run,"planner",{"request":"做一个游戏"}))
     last=asyncio.run(real_agent_decision(run,"reviewer",{"request":"做一个游戏","artifact":{}}))
     assert first.rendering=="canvas2d"

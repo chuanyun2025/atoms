@@ -11,6 +11,7 @@ from atoms.config import settings
 from atoms.db import all_rows, execute, one, transaction
 from atoms.model import ModelError
 from atoms.vidu import ViduClient
+from atoms.provider_client import ProviderClient
 from test_video import project_and_image, start, FIXTURES, PROMPT
 
 
@@ -21,8 +22,7 @@ def job_for(run):
 
 def fake_provider(monkeypatch,handler):
     monkeypatch.setattr(settings(),"test_fixture",False)
-    monkeypatch.setattr(settings(),"vidu_api_key","test-key")
-    monkeypatch.setattr(video,"ViduClient",lambda *args:ViduClient("test-key",transport=httpx.MockTransport(handler)))
+    monkeypatch.setattr(video,"ProviderClient",lambda:ProviderClient(transport=httpx.MockTransport(handler)))
     async def download(run,url):
         from atoms.media import store_asset
         with transaction(True) as conn:
@@ -129,7 +129,7 @@ def test_paid_success_survives_download_failure_and_retry_does_not_charge_twice(
     def handler(request):
         calls.append(request.method)
         return httpx.Response(200,json={"task_id":"paid-task"} if request.method=="POST" else
-            {"state":"success","credits":45,"creations":[{"url":"https://cdn.example.com/video.mp4"}]})
+            {"state":"success","credits":45,"video_url":"https://cdn.example.com/video.mp4"})
     fake_provider(monkeypatch,handler)
     good_download=video.download_video
     async def missing(run,url):
@@ -154,7 +154,7 @@ def test_missing_usage_delivers_video_but_requires_explicit_reconciliation(clien
     assert start(client,project).status_code==202
     def handler(request):
         return httpx.Response(200,json={"task_id":"no-usage"} if request.method=="POST" else
-            {"state":"success","creations":[{"url":"https://cdn.example.com/video.mp4"}]})
+            {"state":"success","video_url":"https://cdn.example.com/video.mp4"})
     fake_provider(monkeypatch,handler)
     run=worker.claim("test-leader")
     asyncio.run(worker.execute_run(run))

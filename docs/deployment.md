@@ -7,7 +7,7 @@
 - 单台 Linux x86_64 ECS，建议先以 2 vCPU / 4 GiB / 40 GiB 作为 Demo 起点，实际需按 Chromium 峰值内存调整。
 - 可解析到 ECS 的域名，以及该域名的有效 TLS 证书和私钥。
 - 可访问的镜像源、Chromium 下载源、模型服务地址及模型余额。
-- 安全组只向公网开放 80/443；22 仅向操作者的固定 IP 开放。8000、9000、5173 不做公网映射。
+- 安全组向公网开放 80/443，22 仅向操作者的固定 IP 开放。8000、8100、9000、5173 使用容器内网。
 - 中国内地地域对外建站前核对备案要求；地域、域名和备案属于部署前置，不能由本地测试代替。
 
 安装 Docker Engine 与 Compose 插件时，按 [阿里云 ECS Docker 指南](https://help.aliyun.com/zh/ecs/user-guide/install-and-use-docker) 和 [Docker 官方文档](https://docs.docker.com/engine/install/) 对照所用发行版操作。[安全组说明](https://help.aliyun.com/en/ecs/user-guide/security-group-rules)、[建站前置说明](https://help.aliyun.com/zh/ecs/user-guide/build-a-website/)。
@@ -30,15 +30,20 @@ mkdir -p deploy/tls
 APP_ENV=production
 APP_ORIGIN=https://实际域名
 COOKIE_SECURE=true
+RUN_CONCURRENCY=1
 DATA_VOLUME_NAME=atoms_data
 LLM_BASE_URL=https://api.deepseek.com
 LLM_MODEL=deepseek-flash
-LLM_API_KEY=实际密钥
 LLM_RESPONSE_MODE=json_object
 LLM_THINKING_MODE=disabled
+PROVIDER_KMS_REGION=cn-hangzhou
+LLM_KMS_SECRET_NAME=atoms/deepseek
+VIDU_KMS_SECRET_NAME=atoms/vidu
 ~~~
 
-保留脚本生成的 SESSION_SECRET 和 SERVICE_TOKEN，不要发布这些值。APP_ORIGIN 必须是完整 HTTPS origin，不包含路径和末尾斜杠。生产启动会检查 HTTPS 和安全 Cookie；主会话使用 host-only Cookie，不应随意切换域名。
+保留脚本生成的 SESSION_SECRET、SERVICE_TOKEN 和 PROVIDER_GATEWAY_TOKEN，限制文件读取权限。APP_ORIGIN 必须是完整 HTTPS origin，不包含路径和末尾斜杠。生产启动会检查 HTTPS 和安全 Cookie；主会话使用 host-only Cookie。
+
+在 KMS 创建通用凭据，凭据值填入供应商 API Key 原文。给 ECS 实例绑定 RAM 角色，只授权读取配置的凭据及相应解密权限。网关通过加固模式获取实例角色的临时凭证，按区域读取 KMS，缓存五分钟。需要使用指定 KMS OpenAPI 域名时，填写 `PROVIDER_KMS_ENDPOINT`。没有配置 KMS 凭据名称的供应商使用 `LLM_API_KEY` 或 `VIDU_API_KEY` 环境配置，对应的 Key 只注入网关。[ECS 实例 RAM 角色访问 KMS](https://help.aliyun.com/zh/kms/key-management-service/use-cases/access-kms-from-an-ecs-instance-in-a-secure-manner/)。
 
 将证书链保存为 deploy/tls/fullchain.pem，私钥保存为 deploy/tls/privkey.pem；设置最小读取权限。证书目录和所有实际环境文件已被 Git 忽略。证书签发、续期按所选 CA 的正式流程完成；续期后校验配置并重载网关。
 
@@ -49,10 +54,26 @@ docker volume create atoms_data
 docker compose --env-file .env.production -f compose.prod.yaml build
 docker compose --env-file .env.production -f compose.prod.yaml up -d
 docker compose --env-file .env.production -f compose.prod.yaml ps
-docker compose --env-file .env.production -f compose.prod.yaml logs --tail 50 api worker gateway
+docker compose --env-file .env.production -f compose.prod.yaml logs --tail 50 api worker gateway provider-gateway
 ~~~
 
-Compose 先运行迁移，再启动 API 和 Worker；Worker 等待 Validator 健康。网关使用静态前端，不运行 Vite。数据放在明确命名的 external volume 中，API 和 Worker 以 UID 10001 访问同一数据库。
+Compose 先运行迁移，再启动 API 和 Worker。Worker 等待 Validator 和供应商网关健康。公网 Nginx 提供静态前端。API 和 Worker 以 UID 10001 访问同一个持久化卷，供应商网关独立运行，通过专用内网提供服务。
+
+现有环境升级时先运行对应环境初始化脚本，补齐独立的网关令牌，再重建 Compose 服务并运行迁移。线上切换前等现有生成任务结束。更换兼容文本模型时更新 `LLM_BASE_URL`、`LLM_MODEL`、认证与能力配置，再单独重建 `provider-gateway`。视频任务在供应商侧生成后，保留原供应商账户的访问权限，直到已提交的任务查询和下载完成。
+
+网关接口使用 `/internal/v1` 前缀，调用方通过 `Authorization: Bearer` 传入内部令牌。
+
+| 方法和路径 | Worker 契约 |
+| --- | --- |
+| `GET /capabilities` | 文本模型名称及文本、视频配置状态 |
+| `GET /text/capabilities` | 本次配置的输出 token 上限，优先取供应商元数据 |
+| `POST /text/generate` | 输入消息、输出上限、可选 JSON Schema。返回文本及输入、输出 token |
+| `POST /video/tasks` | 输入描述、可选首帧和视频参数。返回任务 ID |
+| `GET /video/tasks/{task_id}` | 返回状态、实际供应商积分和结果地址 |
+
+视频由网关选择供应商模型。Worker 提交任务时带上已报价的模型标识，配置切换导致型号不一致时，在调用供应商前拒绝提交。更换视频型号时同步更新平台的可售型号和费率，并处理完旧供应商的在途任务。
+
+网关记录操作、Run ID、耗时和错误类。默认每分钟最多 120 个付费请求，文本和视频各最多 3 个并发请求，可用 `PROVIDER_REQUESTS_PER_MINUTE` 和 `PROVIDER_MAX_CONCURRENCY` 调整。积分预授权、结算及任务恢复仍由应用执行。部署的容器无法从公网访问该接口。
 
 基础镜像已固定 digest，JavaScript 使用 package-lock.json，Python 使用 uv.lock。升级基础镜像、依赖或 Playwright 时，需要重新运行解析、真实沙箱和端到端检查，随后再上云。
 
@@ -154,6 +175,6 @@ docker compose --env-file .env.production -f compose.prod.yaml exec -T api pytho
 
 只允许核对 uncertain 调用；不能从客户端给自己增加余额。结算和释放都会留账，已结算调用不会被重复扣费。不要仅根据“任务失败”就释放可能已产生的供应商用量。
 
-`RUN_CONCURRENCY` 设置单 Worker 同时运行的任务数，默认 3，范围 1–8。根据模型供应商的并发额度和机器资源调整。浏览器校验保留一个槽位。多项目共享钱包，并发调用仍按事务预授权和实际用量结算。
+`RUN_CONCURRENCY` 设置单 Worker 同时运行的任务数，默认 1，范围 1–8。已有环境文件如果显式配置了此变量，需要修改该文件并重建 Worker 才能切换。浏览器校验保留一个槽位。多项目共享钱包，并发调用仍按事务预授权和实际用量结算。
 
 容量超过单机 SQLite、单 Worker 或 Chromium 配额时再规划 PostgreSQL、外部队列和更强执行隔离。不要直接增加 Worker 副本绕过本项目的单例租约。

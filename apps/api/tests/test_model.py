@@ -70,19 +70,16 @@ def test_legacy_slide_revision_keeps_guidance_without_navigation_contract():
 def test_provider_protocol_and_sanitized_errors(monkeypatch):
     config=settings()
     monkeypatch.setattr(config,"test_fixture",False)
-    monkeypatch.setattr(config,"llm_base_url","https://api.deepseek.com")
-    monkeypatch.setattr(config,"llm_model","deepseek-flash")
-    monkeypatch.setattr(config,"llm_api_key","secret-do-not-expose")
-    monkeypatch.setattr(config,"llm_response_mode","json_object")
+    monkeypatch.setattr(config,"provider_gateway_token","internal-test-token")
     original=httpx.AsyncClient
     def handler(request):
-        assert str(request.url)=="https://api.deepseek.com/chat/completions"
-        assert request.headers["authorization"]=="Bearer secret-do-not-expose"
+        assert str(request.url)=="http://provider-gateway:8100/internal/v1/text/generate"
+        assert request.headers["authorization"]=="Bearer internal-test-token"
         body=__import__("json").loads(request.content)
-        assert body["model"]=="deepseek-flash" and body["stream"] is False
-        assert "max_tokens" in body and "max_completion_tokens" not in body
-        return httpx.Response(401,json={"message":"secret-do-not-expose"})
-    monkeypatch.setattr(httpx,"AsyncClient",lambda **kwargs:original(transport=httpx.MockTransport(handler)))
+        assert "model" not in body and body["max_output_tokens"]==393216
+        assert body["response_schema"]["name"]=="artifact"
+        return httpx.Response(401,json={"error":{"code":"MODEL_AUTH","message":"模型服务认证失败"}})
+    monkeypatch.setattr(httpx,"AsyncClient",lambda **kwargs:original(**{**kwargs, 'transport':httpx.MockTransport(handler)}))
     with pytest.raises(ModelError) as caught:
         asyncio.run(generate(Prepared([{"role":"user","content":"测试"}],2000,393216),393216))
     assert caught.value.code=="MODEL_AUTH" and "secret" not in str(caught.value)

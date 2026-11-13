@@ -15,6 +15,7 @@ from .exchange_rates import RATES_FILE, reference_rates, wants_exchange_rates
 from .editorial_feed import NEWS_FILE, editorial_snapshot, has_editorial_snapshot, wants_editorial_feed
 from .website_starters import MEDIA_FILE, match_website_starter
 from .model import generate,prepare,prepare_decision,ModelError
+from .provider_client import ProviderClient
 from .orchestration import FPS_COVER_FILE, PLAN_FILE, TaskPlan, enforce_plan, game_dimension, game_reference, has_threejs, parse_decision, requests_fps
 from .skills import skill_for
 from .game_scenes import scene_direction
@@ -69,19 +70,25 @@ def acquire_leader(token):
         row=one(conn,"SELECT * FROM worker_status WHERE id=1")
         if row["lease_until"]>now and row["lease_token"]!=token:
             return False
-        execute(conn,"UPDATE worker_status SET lease_token=:token,lease_until=:until,heartbeat_at=:now,state='idle',model_configured=:configured WHERE id=1",
-                token=token,until=now+30,now=now,configured=int(settings().model_configured))
+        fixture=settings().test_fixture
+        execute(conn,"""UPDATE worker_status SET lease_token=:token,lease_until=:until,heartbeat_at=:now,state='idle',
+                model_configured=:fixture,video_configured=:fixture,text_model=:model WHERE id=1""",
+                token=token,until=now+30,now=now,fixture=int(fixture),model="test-fixture-only" if fixture else None)
         return True
 
 
-def heartbeat(token, active_leases=()):
+def heartbeat(token, active_leases=(), capabilities=None):
     now=time.time()
     with transaction(True) as conn:
         row=one(conn,"SELECT * FROM worker_status WHERE id=1")
         if row["lease_token"]!=token or row["lease_until"]<=now:
             raise LeaseLost()
-        execute(conn,"UPDATE worker_status SET lease_until=:until,heartbeat_at=:now,state=:state,model_configured=:configured WHERE id=1",
-                until=now+30,now=now,state="busy" if active_leases else "idle",configured=int(settings().model_configured))
+        execute(conn,"UPDATE worker_status SET lease_until=:until,heartbeat_at=:now,state=:state WHERE id=1",
+                until=now+30,now=now,state="busy" if active_leases else "idle")
+        if capabilities is not None:
+            execute(conn,"UPDATE worker_status SET model_configured=:text,video_configured=:video,text_model=:model WHERE id=1",
+                    text=int(capabilities["text_configured"] is True),video=int(capabilities["video_configured"] is True),
+                    model=capabilities.get("text_model"))
         for run_id, run_token in active_leases:
             execute(conn,"""UPDATE runs SET lease_until=:until WHERE id=:id AND lease_token=:token
                 AND status='running' AND lease_until>:now AND started_at>:deadline""",
@@ -100,11 +107,11 @@ def claim(token):
         leader=one(conn,"SELECT * FROM worker_status WHERE id=1")
         if leader["lease_token"]!=token or leader["lease_until"]<=now:
             raise LeaseLost()
-        if maintenance(conn) or not (settings().model_configured or settings().video_configured):
+        if maintenance(conn) or not (leader["model_configured"] or leader["video_configured"]):
             return None
         row=one(conn,"""SELECT r.* FROM runs r JOIN projects p ON p.id=r.project_id WHERE r.status='pending'
             AND ((p.kind='video' AND :video=1) OR (p.kind!='video' AND :code=1)) ORDER BY r.created_at,r.id LIMIT 1""",
-            video=int(settings().video_configured),code=int(settings().model_configured))
+            video=leader["video_configured"],code=leader["model_configured"])
         if not row:
             return None
         lease=uid()
@@ -223,7 +230,7 @@ def recoverable_model_output(error):
 async def paid_request(run,attempt,prepared):
     call=await asyncio.to_thread(reserve_call,run,attempt,prepared.input_ceiling,prepared.output_limit)
     try:
-        result=await generate(prepared,call["output_limit"])
+        result=await generate(prepared,call["output_limit"],run_id=run["id"])
     except ModelError as e:
         if e.usage:
             await asyncio.to_thread(settle_call,call,e.usage.input_tokens,e.usage.output_tokens,e.usage.request_id)
@@ -608,7 +615,14 @@ async def main():
     async def pulse():
         while True:
             leases = tuple((run["id"], run["lease_token"]) for run in active.values())
-            await asyncio.to_thread(heartbeat, token, leases)
+            capabilities = None
+            if not settings().test_fixture:
+                try:
+                    async with asyncio.timeout(3), ProviderClient() as provider:
+                        capabilities = await provider.capabilities()
+                except (ModelError,TimeoutError):
+                    capabilities = {"text_configured":False,"video_configured":False}
+            await asyncio.to_thread(heartbeat, token, leases, capabilities)
             await asyncio.to_thread(recover_expired)
             await asyncio.sleep(5)
 

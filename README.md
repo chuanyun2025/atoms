@@ -31,13 +31,13 @@ LLM_THINKING_MODE=disabled
 
 deepseek-flash 是官方 API 名称，目前对应 DeepSeek-V4.1-Flash-1017。[官方入口](https://api-docs.deepseek.com/)、[JSON 输出](https://api-docs.deepseek.com/guides/json_mode/)、[思考模式](https://api-docs.deepseek.com/guides/thinking_mode/)。
 
-修改配置后执行以下命令重建或重新创建服务，然后刷新页面：
+只修改供应商配置时，重新创建网关即可：
 
 ~~~powershell
-docker compose --env-file .env.local up -d --build
+docker compose --env-file .env.local up -d --no-deps --force-recreate provider-gateway
 ~~~
 
-文本模型密钥只注入 Worker。Vidu 视频密钥只注入 API 与 Worker。前端、校验浏览器和导出包都不接收密钥。.env.local 已被 Git 和 Docker 构建上下文排除。缺少配置时工作台可以打开和读取项目，生成入口会明确提示待配置。
+供应商密钥只注入内网 `provider-gateway`。Worker 使用单独的服务令牌请求统一文本和视频接口，API 通过 Worker 心跳读取能力。`.env.local` 已被 Git 和 Docker 构建上下文排除。缺少配置时工作台可以打开和读取项目，生成入口会明确提示待配置。换 OpenAI 兼容文本模型时修改网关配置并重新创建网关即可。
 
 输出空间依据供应商 /models 的原生能力和用户可用积分动态分配。LLM_PROVIDER_MAX_OUTPUT_TOKENS 是能力元数据不可用时的供应商能力回退，不是旧的 8192 token 小上限。DeepSeek 不传 max_tokens 时非思考模式仍默认 8K，因此请求显式使用动态预算。
 
@@ -81,6 +81,7 @@ docker compose --env-file .env.local up -d --build
 | apps/web | React、TypeScript、Vite 工作台 |
 | apps/api/atoms/main.py | FastAPI 接口、会话、SSE、预览与导出 |
 | apps/api/atoms/worker.py | 持久任务领取、模型生成、修复和事务交付 |
+| apps/api/atoms/provider_gateway.py | 内网供应商凭据、限流和协议适配 |
 | apps/api/atoms/model.py | Chat Completions 适配、输出预算与供应商用量 |
 | apps/api/atoms/prompts.py、skills/、artifacts.py | 提示组装、专业生成指导与产物整理 |
 | apps/api/atoms/exchange_rates.py | 欧洲中央银行公开参考汇率接入与短期缓存 |
@@ -93,7 +94,7 @@ docker compose --env-file .env.local up -d --build
 
 SQLite 使用 DELETE journal、短事务和单 Worker；当前实现面向单台机器，不提供水平扩容。成功交付在同一事务中写入产物、版本、项目指针、完成消息和事件。
 
-不同项目默认可以同时执行 3 个任务，网站、游戏、幻灯片和视频共用名额。满额后按提交顺序等待，同一项目保留一个活动任务。可在 `.env.local` 或生产环境文件中调整 `RUN_CONCURRENCY`（1–8），重建 Worker 后生效。浏览器校验使用独立的单槽位，其他任务可以继续生成。
+Worker 默认一次运行 1 个任务，网站、游戏、幻灯片和视频共用名额。满额后按提交顺序等待，同一项目保留一个活动任务。可在 `.env.local` 或生产环境文件中调整 `RUN_CONCURRENCY`（1–8），重建 Worker 后生效。浏览器校验使用独立的单槽位。
 
 生成 Skill 的接入、游戏渲染选择和启动检查见[生成 Skill 实现](docs/generation-skills.md)。
 

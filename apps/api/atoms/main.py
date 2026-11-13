@@ -65,7 +65,7 @@ def ready(response: Response):
     with transaction() as conn:
         worker=one(conn,"SELECT * FROM worker_status WHERE id=1")
     healthy=bool(worker and worker["heartbeat_at"]>time.time()-20 and worker["lease_until"]>time.time())
-    configured=bool(worker and worker["model_configured"]) or settings().video_configured
+    configured=bool(worker and (worker["model_configured"] or worker["video_configured"]))
     if not healthy or not configured:
         response.status_code=503
     return {"database":True,"worker":healthy,"model_configured":configured}
@@ -84,9 +84,10 @@ def capabilities(user=Depends(visitor)):
     with transaction() as conn:
         readonly=maintenance(conn)
         worker=one(conn,"SELECT * FROM worker_status WHERE id=1")
-    return {"model_configured":bool(worker and worker["model_configured"]),"model":settings().llm_model or None,
-            "video_configured":settings().video_configured,"video_model":settings().vidu_model,"video_resolution":settings().vidu_resolution,
-            "worker_available":bool(worker and worker["heartbeat_at"]>time.time()-20 and worker["lease_until"]>time.time()),
+    available=bool(worker and worker["heartbeat_at"]>time.time()-20 and worker["lease_until"]>time.time())
+    return {"model_configured":bool(available and worker["model_configured"]),"model":worker["text_model"] if available else None,
+            "video_configured":bool(available and worker["video_configured"]),"video_model":settings().vidu_model,"video_resolution":settings().vidu_resolution,
+            "worker_available":available,
             "read_only":readonly,"scope":"React / TypeScript 网站与游戏、网页幻灯片、Vidu 图生视频",
             "limits":{"billing":"credits","initial_credits":500,"input_credits_per_million":20,"output_credits_per_million":80}}
 

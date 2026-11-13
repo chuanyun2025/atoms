@@ -1,6 +1,7 @@
 """Create ignored local configuration without printing secrets."""
 from pathlib import Path
 import secrets
+from provider_gateway_token import ensure_gateway_token
 
 root = Path(__file__).resolve().parents[1]
 target = root / ".env.local"
@@ -12,3 +13,4 @@ if not target.exists():
     print("Created .env.local (secrets hidden).")
 else:
     print(".env.local already exists; preserved.")
+ensure_gateway_token(target)

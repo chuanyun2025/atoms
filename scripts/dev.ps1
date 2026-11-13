@@ -9,7 +9,7 @@ if ($Action -eq "up") {
 } elseif ($Action -eq "status") {
     docker compose --env-file .env.local ps
 } elseif ($Action -eq "logs") {
-    docker compose --env-file .env.local logs --tail 60 -f api worker gateway
+    docker compose --env-file .env.local logs --tail 60 -f api worker gateway provider-gateway
 } else {
     docker compose --env-file .env.local $Action
 }

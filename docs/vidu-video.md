@@ -23,10 +23,10 @@ VIDU_CREDIT_PRICE_CNY=0.03125
 然后运行：
 
 ```powershell
-docker compose --env-file .env.local up -d --build api worker
+docker compose --env-file .env.local up -d --no-deps --force-recreate provider-gateway
 ```
 
-Vidu 密钥只进入 API 与 Worker 的服务端配置，不返回前端、不写入生成产物、日志或示例。
+Vidu 密钥只进入供应商网关。Worker 通过统一接口提交与查询视频任务，API 从心跳读取视频服务状态。
 所有用户统一使用平台积分，无需提供供应商账户或密钥。平台按供应商实际费用折算，不额外加价，也不虚构 token 用量。
 没有密钥时，视频页显示服务未连接并禁用生成。网站、游戏、幻灯片继续使用原来的文本模型配置。
 
@@ -49,7 +49,7 @@ docker compose --env-file .env.local exec -T api python -m atoms.ops media-recon
 - 无参考图使用 `POST /ent/v2/text2video`；有参考图使用 `POST /ent/v2/img2video`。通过 `Authorization: Token ...` 提交首帧、原始提示词和输出设置，显式传入 `resolution=540p`（默认）及 `is_rec=false`。
 - `GET /ent/v2/tasks/{id}/creations` 查询创建、排队、生成、成功和失败状态。任务 ID 写入 SQLite 的 `video_jobs`，页面刷新不影响 Worker。
 - 查询失败最多自动重试八次，临时下载故障自动重试两次。已有上游任务可继续查询，不会重新提交相同的付费任务。
-- 提交超时、无法确认是否受理时不会盲目重发。需要操作者在 Vidu 控制台核对，避免重复付费。仅明确返回 429 的拒绝提交可自动重试。
+- 付费提交只发一次。提交结果不确定时保留预授权，并通过 Vidu 控制台核对。查询已受理任务可重试。
 - 成功后将 MP4 下载到持久化目录，再提交项目的新版本。供应商的临时 URL 不进入前端视频产物。
 - 原生视频版本使用独立的 `schema_version=3` 媒体清单，绑定可选首帧、视频文件与请求设置，兼容历史 Q4 视频。它不经过 HTML 编译器，也不在生成代码的沙箱里联网播放。旧的 HTML 分镜版本仍能预览和导出。
 - 首帧和视频只通过有访客归属校验的媒体接口提供。视频支持 Range 请求，原生播放器可以拖动进度，导出接口下载 MP4。

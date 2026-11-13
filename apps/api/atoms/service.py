@@ -80,12 +80,14 @@ def create_run(conn, owner, project_id, data, idempotency_key, ip):
             error(409,"idempotency_conflict","同一提交凭证不能用于不同请求")
         return public_run(one(conn,"SELECT * FROM runs WHERE id=:id",id=previous["run_id"]))
     row = project(conn,project_id,owner)
+    now = time.time()
+    worker = one(conn,"SELECT * FROM worker_status WHERE id=1")
     video_job=None
     source_job=None
     if row["kind"]=="video":
         from .media import owned_asset
         from .schemas import VideoOptions
-        if not settings().video_configured:
+        if not worker or not worker["video_configured"]:
             error(503,"video_not_configured","视频服务尚未连接，请联系管理员")
         if len(data.prompt)>20000:
             error(422,"video_prompt_limit","视频描述不能超过 20000 字")
@@ -128,10 +130,8 @@ def create_run(conn, owner, project_id, data, idempotency_key, ip):
         if source["prompt"]!=data.prompt:
             error(409,"retry_prompt_changed","继续修复会沿用原始需求；修改需求后请正常提交")
         recoverable=bool(one(conn,"SELECT run_id FROM run_candidates WHERE run_id=:id",id=source["id"]))
-    now = time.time()
-    worker = one(conn,"SELECT * FROM worker_status WHERE id=1")
     if row["kind"]!="video" and (not worker or not worker["model_configured"]):
-        error(503,"model_not_configured","模型尚未配置，请在 .env.local 填写模型接口、模型名和密钥")
+        error(503,"model_not_configured","文本生成服务尚未连接，请联系管理员")
     if not worker or worker["heartbeat_at"] < now-20 or worker["lease_until"] < now:
         error(503,"worker_unavailable","生成服务正在启动，请稍后重试")
     try:
