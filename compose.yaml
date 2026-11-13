@@ -1,0 +1,123 @@
+name: atoms
+x-api: &api
+  build:
+    context: .
+    dockerfile: apps/api/Dockerfile
+  environment: &environment
+    APP_ENV: ${APP_ENV:-development}
+    APP_ORIGIN: ${APP_ORIGIN:-http://localhost:8080}
+    COOKIE_SECURE: ${COOKIE_SECURE:-false}
+    SESSION_SECRET: ${SESSION_SECRET:?Run scripts/init_env.py}
+    SERVICE_TOKEN: ${SERVICE_TOKEN:?Run scripts/init_env.py}
+    DATABASE_URL: sqlite:////var/lib/atoms/atoms.db
+    VALIDATOR_URL: http://validator:9000
+    LLM_MODEL: ${LLM_MODEL:-}
+    VIDU_API_KEY: ${VIDU_API_KEY:-}
+    VIDU_BASE_URL: ${VIDU_BASE_URL:-https://api.vidu.cn}
+    VIDU_MODEL: ${VIDU_MODEL:-viduq3-pro}
+    VIDU_RESOLUTION: ${VIDU_RESOLUTION:-540p}
+    VIDU_POLL_SECONDS: ${VIDU_POLL_SECONDS:-5}
+    VIDU_CREDIT_PRICE_CNY: ${VIDU_CREDIT_PRICE_CNY:-0.03125}
+    MEDIA_ROOT: /var/lib/atoms/media
+    TEST_FIXTURE: ${TEST_FIXTURE:-false}
+    READ_ONLY_MODE: ${READ_ONLY_MODE:-false}
+    RUN_TIMEOUT_SECONDS: ${RUN_TIMEOUT_SECONDS:-3600}
+    PENDING_TIMEOUT_SECONDS: ${PENDING_TIMEOUT_SECONDS:-3600}
+  volumes:
+    - app_data:/var/lib/atoms
+  networks: [backend]
+  init: true
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+services:
+  migrate:
+    <<: *api
+    command: ["alembic","upgrade","head"]
+    restart: "no"
+  api:
+    <<: *api
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD","python","-c","import urllib.request; urllib.request.urlopen('http://localhost:8000/health/live')"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+  worker:
+    <<: *api
+    command: ["python","-m","atoms.worker"]
+    environment:
+      <<: *environment
+      RUN_CONCURRENCY: ${RUN_CONCURRENCY:-3}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_RESPONSE_MODE: ${LLM_RESPONSE_MODE:-text}
+      LLM_THINKING_MODE: ${LLM_THINKING_MODE:-}
+      LLM_TOKEN_LIMIT_PARAM: ${LLM_TOKEN_LIMIT_PARAM:-max_tokens}
+      LLM_PROVIDER_MAX_OUTPUT_TOKENS: ${LLM_PROVIDER_MAX_OUTPUT_TOKENS:-393216}
+      LLM_REQUEST_TIMEOUT_SECONDS: ${LLM_REQUEST_TIMEOUT_SECONDS:-1500}
+      TEST_FIXTURE: ${TEST_FIXTURE:-false}
+    networks: [backend,egress]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      validator:
+        condition: service_healthy
+    stop_grace_period: 30s
+  validator:
+    build:
+      context: .
+      dockerfile: apps/validator/Dockerfile
+    environment:
+      APP_ORIGIN: ${APP_ORIGIN:-http://localhost:8080}
+      SERVICE_TOKEN: ${SERVICE_TOKEN:?Run scripts/init_env.py}
+      HOME: /tmp
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=268435456,mode=1777
+    shm_size: 256mb
+    mem_limit: 768m
+    cpus: 2
+    pids_limit: 256
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./deploy/seccomp/playwright.json
+    networks: [backend]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD","node","-e","fetch('http://localhost:9000/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile.dev
+    volumes:
+      - ./apps/web/src:/app/apps/web/src
+    environment:
+      CHOKIDAR_USEPOLLING: "true"
+      HMR_CLIENT_PORT: ${GATEWAY_PORT:-8080}
+    networks: [backend]
+  gateway:
+    image: public.ecr.aws/docker/library/nginx:stable-alpine@sha256:583b7f2fce1cdb8da5ad5c39ebd3c33b98b87d493190e548bdee1fa8c619c311
+    ports: ["127.0.0.1:${GATEWAY_PORT:-8080}:80"]
+    volumes:
+      - ./deploy/nginx/development.conf:/etc/nginx/conf.d/default.conf:ro
+    networks: [backend,ingress]
+    depends_on:
+      api:
+        condition: service_started
+      web:
+        condition: service_started
+networks:
+  backend:
+    internal: true
+  egress: {}
+  ingress: {}
+volumes:
+  app_data: {}

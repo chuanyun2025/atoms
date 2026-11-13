@@ -1,0 +1,35 @@
+.orbital-game,.tidal-game{
+  --game-bg:#10283b;--game-panel:#1c3d54;--game-text:#effaff;--game-muted:#acc9da;--game-accent:#7deddb;
+  min-width:0;background:var(--game-bg);border-radius:14px;color:var(--game-text);
+  padding:clamp(12px,2.5vw,23px);font-family:"Space Grotesk",system-ui,sans-serif;
+}
+.tidal-game{--game-bg:#161d3e;--game-panel:#24335b;--game-accent:#9ce9ff}
+.mission-header{display:flex;gap:12px;justify-content:space-between;align-items:flex-start;margin-bottom:13px}
+.mission-kicker{font-size:12px;letter-spacing:.13em;color:var(--game-accent);font-weight:750;margin:0 0 4px}
+.mission-header h3{margin:0;color:var(--game-text);font-size:clamp(20px,4vw,30px);line-height:1.17}
+.mission-sector{padding:6px 9px;border:1px solid #7fc5e94d;border-radius:6px;color:var(--game-muted);font-size:12px;white-space:nowrap}
+.mission-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-bottom:12px}
+.mission-stats span{display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0;padding:8px;background:var(--game-panel);border-radius:7px;color:var(--game-muted);font-size:12px}
+.mission-stats b{font-variant-numeric:tabular-nums;color:var(--game-text);font-size:14px}
+.mission-stats svg{color:var(--game-accent);flex-shrink:0}
+.orbit-board,.tidal-board{position:relative;isolation:isolate;overflow:hidden;border:1px solid #719fbb72;border-radius:9px;background:#081e2d}
+.orbit-grid{display:grid;grid-template-columns:repeat(9,minmax(0,1fr));gap:2px;padding:7px}
+.orbit-cell{display:grid;place-items:center;aspect-ratio:1.47;min-width:0;border-radius:4px;background:#173649;color:#d0f3ff;font-size:clamp(13px,2.4vw,21px);line-height:1}
+.orbit-cell.wall{background:linear-gradient(145deg,#21475c,#112637);border:1px solid #3c688069}
+.orbit-cell.relay{background:#22555e;color:#8fffe0;text-shadow:0 0 9px #6bffe5}
+.orbit-cell.charge{background:#31594c;color:#d2f3a2}.orbit-cell.storm{background:#57405c;color:#ffc598}
+.orbit-cell.exit{background:#294063;color:#b5cbff}.orbit-ship{width:63%;max-width:28px;aspect-ratio:1;background:#9bfff1;clip-path:polygon(50% 0,100% 95%,50% 74%,0 95%);filter:drop-shadow(0 0 4px #62dfd5)}
+.tidal-board canvas{display:block;width:100%;height:auto;touch-action:none}
+.mission-overlay{position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:9px;padding:12px;text-align:center;background:#081827bb}
+.mission-overlay strong{font-size:clamp(20px,4vw,34px);line-height:1.1;color:var(--game-text)}
+.mission-overlay p{margin:0;color:#d4eaf1;line-height:1.6;font-size:clamp(11px,2vw,14px);max-width:29rem}
+.mission-overlay-actions{display:flex;justify-content:center;flex-wrap:wrap;gap:7px}
+.mission-overlay-actions button,.mission-input button{border:1px solid transparent;border-radius:7px;background:var(--game-accent);color:#0e2c3a;font:700 13px system-ui;cursor:pointer;padding:8px 11px;min-height:42px}
+.mission-input{display:flex;justify-content:space-between;align-items:center;gap:6px;margin-top:9px;flex-wrap:wrap}
+.mission-input div{display:flex;gap:5px}.mission-input button{display:inline-grid;place-items:center;min-width:42px;background:var(--game-panel);color:var(--game-text);border-color:#6a9db65d}
+.mission-input button:disabled{opacity:.43;cursor:default}
+.orbital-game :focus-visible,.tidal-game :focus-visible{outline:2px solid var(--game-accent);outline-offset:2px}
+.mission-feedback{min-height:18px;margin:10px 0 0;font-size:12px;color:var(--game-muted)}
+.flight-progress{display:flex;align-items:center;gap:8px;margin-top:10px;font:12px system-ui;color:var(--game-muted)}
+.flight-progress progress{width:100%;height:8px;accent-color:var(--game-accent)}
+@media(max-width:410px){.mission-stats span{font-size:11px;gap:4px;padding:6px}.mission-input button{min-width:36px;min-height:38px;padding:6px 8px}.mission-overlay{gap:5px}}

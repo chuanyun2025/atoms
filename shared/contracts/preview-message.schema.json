@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["protocol_version", "instance_id", "message_id", "type", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "protocol_version": {"const": 1},
+    "instance_id": {"type": "string", "maxLength": 100},
+    "message_id": {"type": "string", "maxLength": 100},
+    "type": {"enum": ["storage.set", "storage.remove", "storage.flush", "runtime.ready", "runtime.error"]},
+    "payload": {"type": "object"}
+  }
+}

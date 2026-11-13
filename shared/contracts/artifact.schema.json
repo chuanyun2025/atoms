@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AtomsArtifact",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "title", "summary", "files"],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1"},
+    "title": {"type": "string", "minLength": 1, "maxLength": 80},
+    "summary": {"type": "string", "minLength": 1, "maxLength": 600},
+    "files": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index.html", "styles.css", "app.js"],
+      "properties": {
+        "index.html": {"type": "string", "minLength": 1},
+        "styles.css": {"type": "string"},
+        "app.js": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

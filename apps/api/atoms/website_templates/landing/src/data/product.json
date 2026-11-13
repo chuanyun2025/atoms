@@ -1,0 +1,17 @@
+{
+  "brand":"[[copy:site.name]]",
+  "category":"[[copy:product.category]]",
+  "headline":"[[copy:hero.headline]]",
+  "description":"[[copy:hero.intro]]",
+  "features":[
+    {"icon":"◉","name":"[[copy:feature.1.name]]","copy":"[[copy:feature.1.description]]"},
+    {"icon":"◒","name":"[[copy:feature.2.name]]","copy":"[[copy:feature.2.description]]"}
+  ],
+  "versions":[
+    {"name":"[[copy:version.1.name]]","use":"[[copy:version.1.use]]","specs":[{"label":"[[copy:spec.label]]","value":"[[copy:version.1.value]]"}]},
+    {"name":"[[copy:version.2.name]]","use":"[[copy:version.2.use]]","specs":[{"label":"[[copy:spec.label]]","value":"[[copy:version.2.value]]"}]}
+  ],
+  "questions":[
+    {"question":"[[copy:faq.question]]","answer":"[[copy:faq.answer]]"}
+  ]
+}

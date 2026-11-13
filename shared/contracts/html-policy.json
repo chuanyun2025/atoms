@@ -1,0 +1,5 @@
+{
+  "tags": "html head body title main section article header footer nav aside div span p h1 h2 h3 h4 h5 h6 ul ol li dl dt dd a button input textarea select option optgroup label form fieldset legend output progress meter table thead tbody tfoot tr th td caption colgroup col details summary dialog img figure figcaption picture source br wbr hr strong em b i u s small mark code pre blockquote q cite dfn kbd samp var data time abbr address sub sup ruby rt rp bdi bdo ins del datalist canvas",
+  "attributes": "id class title role tabindex hidden inert lang dir type name value placeholder disabled checked selected multiple required readonly min max step minlength maxlength pattern autocomplete inputmode rows cols for size colspan rowspan scope open datetime alt width height src href target rel download method action novalidate formnovalidate contenteditable style list accept autofocus autocapitalize autocorrect spellcheck translate enterkeyhint form label wrap low high optimum reversed start headers abbr span draggable popover popovertarget popovertargetaction",
+  "attribute_prefixes": ["data-", "aria-"]
+}

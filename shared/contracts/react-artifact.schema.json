@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AtomsReactArtifact",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "title", "summary", "files"],
+  "properties": {
+    "schema_version": {"const": "2"},
+    "title": {"type": "string", "minLength": 1, "maxLength": 80},
+    "summary": {"type": "string", "minLength": 1, "maxLength": 600},
+    "files": {
+      "type": "object",
+      "required": ["src/App.tsx", "src/styles.css"],
+      "minProperties": 3,
+      "additionalProperties": false,
+      "patternProperties": {
+        "^src/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\\.(?:tsx?|json)$": {"type": "string", "minLength": 1},
+        "^src/styles\\.css$": {"type": "string"}
+      },
+      "properties": {
+        "src/App.tsx": {"type": "string", "minLength": 1},
+        "src/styles.css": {"type": "string"}
+      }
+    }
+  }
+}

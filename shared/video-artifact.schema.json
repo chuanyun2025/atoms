@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Native video artifact",
+  "description": "Trusted media manifest committed by the Vidu worker, separate from executable web artifacts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "title", "summary", "files", "media"],
+  "properties": {
+    "schema_version": {"const": "3"},
+    "title": {"type": "string", "minLength": 1, "maxLength": 80},
+    "summary": {"type": "string"},
+    "files": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["video.json"],
+      "properties": {"video.json": {"type": "string"}}
+    },
+    "media": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["asset_id", "image_asset_id", "model", "resolution", "duration", "audio"],
+      "properties": {
+        "asset_id": {"type": "string", "pattern": "^[a-f0-9]{32}$"},
+        "image_asset_id": {"type": ["string", "null"], "pattern": "^[a-f0-9]{32}$"},
+        "model": {"enum": ["viduq3-pro", "viduq4-preview"]},
+        "resolution": {"enum": ["540p", "720p", "1080p", "2K", "4K"]},
+        "duration": {"type": "integer", "minimum": 1, "maximum": 16},
+        "audio": {"type": "boolean"}
+      }
+    }
+  }
+}

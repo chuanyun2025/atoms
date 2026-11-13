@@ -1,0 +1,28 @@
+import {test,expect} from "@playwright/test";
+test("生产静态包、严格主站 CSP、SPA 路由和会话",async({page})=>{
+  const errors:string[]=[];page.on("pageerror",e=>errors.push(e.message));
+  const response=await page.goto("/");
+  expect(response?.headers()["content-security-policy"]).toContain("script-src 'self';");
+  await expect(page.getByRole("heading",{name:"你想创造什么？"})).toBeVisible();
+  const gallery=page.getByRole("region",{name:"首页作品区"});
+  await gallery.getByRole("button",{name:"项目",exact:true}).click();
+  await expect(page.getByText("还没有项目",{exact:true})).toBeVisible();
+  await gallery.getByRole("button",{name:"发现",exact:true}).click();
+  await expect.poll(()=>gallery.locator("img").evaluateAll(images=>images.every(image=>(image as HTMLImageElement).naturalWidth>0))).toBe(true);
+  await page.screenshot({path:"test-results/studio-prod-home.png",fullPage:true});
+  await page.goto("/slides/templates/product-launch");
+  await expect(page.getByRole("heading",{name:"产品发布简报",exact:true})).toBeVisible();
+  await expect(page.getByLabel("把它变成你的")).toHaveValue(/声屿桌面音箱新品发布/);
+  await expect.poll(()=>page.locator(".template-preview > .template-slide img").evaluate(image=>(image as HTMLImageElement).naturalWidth)).toBe(720);
+  await page.goto("/");
+  await page.getByLabel("描述应用需求").fill("生产静态镜像路由检查");
+  await page.getByRole("button",{name:"开始创建",exact:true}).click();
+  await expect(page).toHaveURL(/\/projects\//);
+  await expect(page.getByText("模型待配置，连接后即可生成应用。")).toBeVisible();
+  await page.reload();
+  await expect(page.getByLabel("描述需求或修改")).toHaveValue("生产静态镜像路由检查");
+  await page.getByRole("button",{name:"访",exact:true}).click();
+  await expect(page.getByRole("dialog",{name:"工作台说明"})).toBeVisible();
+  await page.getByRole("button",{name:"关闭",exact:true}).click();
+  expect(errors).toEqual([]);
+});

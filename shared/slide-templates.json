@@ -1,0 +1,62 @@
+[
+  {
+    "id": "quarterly-review",
+    "name": "季度业务复盘",
+    "description": "用指标、趋势和行动计划讲清一个季度。",
+    "theme": "report",
+    "eyebrow": "BUSINESS REVIEW",
+    "palette": {"background": "#eef3fc", "ink": "#132a56", "accent": "#325dd8", "secondary": "#c6d8fa"},
+    "design": "雾蓝底与海军蓝文字，使用钴蓝强调关键数据。封面左侧为大号标题，右侧为阶梯柱图。内页以对齐的数字、短标签、网格和简洁时间线组织内容。保持 16:9、清晰坐标和充足留白。",
+    "fields": {
+      "topic": "客户运营团队 Q2 复盘",
+      "audience": "部门负责人和跨团队同事",
+      "content": "说明本季度的核心目标、实际结果、主要变化及下一季度行动。仅使用我提供的真实数字，缺失处注明待补充。"
+    },
+    "slides": [
+      {"layout": "cover", "title": "季度业务复盘", "description": "目标进展、关键指标与下一季度优先级", "notes": "主标题与一句摘要居左，右侧柱图作为封面构图。"},
+      {"layout": "metrics", "title": "核心指标", "description": "示例数据 · 客户运营", "notes": "一排关键指标和一张带单位的趋势图，突出最重要的变化。", "items": [{"title": "目标达成率", "detail": "92%"}, {"title": "活跃客户", "detail": "1,280"}, {"title": "季度续约率", "detail": "86%"}]},
+      {"layout": "features", "title": "进展与挑战", "description": "区分已经验证的进展和仍需处理的问题。", "notes": "两列分别列出已达成和待解决事项，每列留一个简短结论。", "items": [{"title": "已经达成", "detail": "优化新客引导，将首次关键操作提前到首周。"}, {"title": "仍待解决", "detail": "统一流失归因，补齐关键渠道的监测数据。"}]},
+      {"layout": "timeline", "title": "下一季度优先级", "description": "以里程碑串起三项行动。", "notes": "三阶段时间线，标注行动、负责人或完成条件。", "items": [{"title": "梳理指标", "detail": "统一口径与看板"}, {"title": "开展试点", "detail": "验证重点渠道"}, {"title": "复盘推广", "detail": "确认结果和下一步"}]}
+    ]
+  },
+  {
+    "id": "product-launch",
+    "name": "产品发布简报",
+    "description": "大图封面、卖点拆解和发布节奏。",
+    "theme": "launch",
+    "eyebrow": "PRODUCT LAUNCH",
+    "palette": {"background": "#221d29", "ink": "#fff4eb", "accent": "#ff9861", "secondary": "#543d43"},
+    "design": "深石墨背景，暖橙强调，浅色无衬线大标题。封面左侧是产品名和价值主张，右侧是大幅产品视觉。内页通过大数字或线条拆解场景与卖点，收尾使用横向发布节奏。使用用户提供的视觉素材，缺少素材时以 CSS 形态或有意义的排版呈现。",
+    "fields": {
+      "topic": "声屿桌面音箱新品发布",
+      "audience": "关注桌面体验的首批用户",
+      "content": "从办公桌的聆听场景开场，讲清产品价值、三个核心卖点和发布节奏。价格和日期使用我提供的信息。"
+    },
+    "slides": [
+      {"layout": "cover", "title": "声屿", "description": "为你的桌面，留一点好声音。", "notes": "左右分栏封面。产品名字号最大，右侧用具有清晰轮廓的主视觉。"},
+      {"layout": "features", "title": "为什么是现在", "description": "从真实使用情境出发，让需求先于产品参数出现。", "notes": "双列对照现有痛点与希望达到的体验。", "items": [{"title": "桌面太拥挤", "detail": "线缆和设备争夺有限空间。"}, {"title": "切换太频繁", "detail": "专注、会议和休息需要自然衔接。"}]},
+      {"layout": "features", "title": "三个核心体验", "description": "把产品特征翻译成用户能感受到的收益。", "notes": "三个对齐的卖点区块，每项有简洁标题、实际收益和简短解释。", "items": [{"title": "轻巧轮廓", "detail": "小面积占用，保留桌面空间。"}, {"title": "无线连接", "detail": "随手切换不同设备。"}, {"title": "氛围灯光", "detail": "为工作间隙增加柔和光线。"}]},
+      {"layout": "timeline", "title": "从预告到上市", "description": "给听众清楚的下一步。", "notes": "横向三阶段，最后用暖橙强调用户的行动。", "items": [{"title": "开放预告", "detail": "公布产品与体验"}, {"title": "首批体验", "detail": "收集真实反馈"}, {"title": "正式发布", "detail": "公布购买渠道"}]}
+    ]
+  },
+  {
+    "id": "research-report",
+    "name": "研究成果汇报",
+    "description": "从研究问题、方法到发现和结论。",
+    "theme": "research",
+    "eyebrow": "RESEARCH BRIEF",
+    "palette": {"background": "#f3f2e9", "ink": "#173e32", "accent": "#487760", "secondary": "#cad9b9"},
+    "design": "温和的米白纸面与墨绿文字，封面采用编辑式标题和浅色几何构图。内页用细分隔线、表格或分组排版呈现研究证据。保持结论、观察和局限区分，留出来源和日期的位置。",
+    "fields": {
+      "topic": "社区公共空间使用情况调研",
+      "audience": "设计评审老师和社区项目团队",
+      "content": "介绍研究问题、实地观察与访谈方法、主要发现和建议。引用我提供的数据和来源，未提供的样本与结论标记待补充。"
+    },
+    "slides": [
+      {"layout": "cover", "title": "街角如何被使用", "description": "社区公共空间的观察与访谈", "notes": "纸面感编辑式封面，主题居左，以浅绿几何图形形成留白。"},
+      {"layout": "features", "title": "研究问题与方法", "description": "理解不同人群如何在一天中使用街角空间。", "notes": "双列展示研究问题和采集方法，方法标注时间与范围。", "items": [{"title": "问题", "detail": "空间使用强度怎样随时段变化？"}, {"title": "方法", "detail": "定点观察、动线记录与短访谈。"}]},
+      {"layout": "features", "title": "主要观察", "description": "区分可观察事实与需要进一步验证的推断。", "notes": "并列呈现两条核心发现和证据，保留来源或方法说明。", "items": [{"title": "停留集中", "detail": "有座椅和树荫的位置更容易形成停留。"}, {"title": "时段不同", "detail": "早晚的使用方式与午间有明显差异。"}]},
+      {"layout": "timeline", "title": "结论与后续", "description": "用小规模验证推进设计决策。", "notes": "三段收尾，分别交代行动、补充调研和决策条件。", "items": [{"title": "调整座椅", "detail": "优先优化阴凉区"}, {"title": "补充观察", "detail": "增加周末样本"}, {"title": "确认方案", "detail": "与使用者复核"}]}
+    ]
+  }
+]

@@ -1,0 +1,10 @@
+.build-failure{border:1px solid #e7ddd0;border-radius:10px;background:#fcfaf5;padding:15px 14px;color:#7e725f}
+.failure-title{display:flex;align-items:center;gap:7px;color:#8c734d;font-size:12px}.failure-title strong{font-weight:550}
+.build-failure>p{font-size:12px;line-height:1.9;margin:10px 0 14px;color:#8b8170}
+.failure-actions{display:flex;gap:13px;align-items:center}
+.continue-button{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:8px 11px;background:#307253;color:white;border-radius:6px;font-size:11px;min-height:33px}
+.continue-button:hover:not(:disabled){background:#245c43}.failure-edit{display:flex;align-items:center;gap:3px;font-size:11px;color:#788a75;padding:7px 0}
+.build-failure>small{display:block;font-size:10px;line-height:1.8;color:#a39987;margin-top:11px}
+.build-failure details{border-top:1px solid #ece5d9;margin-top:12px;padding-top:9px}
+.build-failure summary{cursor:pointer;font-size:10px;color:#a29782;padding:3px 0}
+.build-failure pre{font:10px/1.8 Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;max-height:160px;overflow:auto;margin:9px 0 0;color:#a38d70}

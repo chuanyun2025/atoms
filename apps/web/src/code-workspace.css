@@ -1,0 +1,49 @@
+.react-code-panel {
+  display: grid;
+  grid-template-columns: minmax(155px, 21%) minmax(0, 1fr);
+}
+.code-file-browser {
+  min-width: 0;
+  overflow: auto;
+  padding: 10px 8px;
+  background: #f8faff;
+  border-right: 1px solid #e3e9f4;
+  color: #3a4865;
+  font-size: 12px;
+}
+.code-file-browser input {
+  width: 100%;
+  border: 1px solid #dce3f1;
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin: 0 0 9px;
+}
+.code-file-browser input:focus-visible { outline: 2px solid #a5b7f4; }
+.code-file-browser summary { padding: 7px 4px; cursor: pointer; }
+.code-file-browser svg { vertical-align: text-bottom; }
+.code-file-browser button {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  border-radius: 5px;
+  padding: 6px 9px 6px 16px;
+  overflow-wrap: anywhere;
+}
+.code-file-browser button[aria-current="true"] { background: #e0e8ff; color: #2748ab; }
+.code-file-content { min-height: 0; min-width: 0; display: flex; flex-direction: column; }
+.code-file-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-bottom: 1px solid #e5eaf4;
+  color: #405172;
+  font-size: 12px;
+}
+.code-file-heading small { color: #66758f; }
+@media(max-width: 900px) {
+  .react-code-panel { grid-template-columns: minmax(0,1fr); grid-template-rows: minmax(100px,26%) minmax(0,1fr); }
+  .code-file-browser { border-right: 0; border-bottom: 1px solid #e3e9f4; }
+}
