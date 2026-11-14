@@ -1,4 +1,5 @@
 """Stable internal API for text generation and asynchronous video."""
+import asyncio
 import re
 
 import httpx
@@ -46,6 +47,9 @@ class ProviderClient:
             )
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout):
             raise ModelError("MODEL_CONNECTION","暂未连接到模型网关，请稍后重试") from None
+        except httpx.TimeoutException:
+            code="MODEL_TIMEOUT" if path=="/internal/v1/text/generate" else "MODEL_NETWORK"
+            raise ModelError(code,"模型网关响应超时，请稍后重试",uncertain=paid) from None
         except httpx.HTTPError:
             raise ModelError("MODEL_NETWORK","模型网关响应中断，请稍后查询",uncertain=paid) from None
         try:
@@ -76,10 +80,18 @@ class ProviderClient:
             raise ModelError("MODEL_CONFIG","模型网关未提供有效的输出上限")
         return limit
 
-    async def generate(self, messages, limit, response_schema, *, run_id=None):
-        result = await self.request("POST","/internal/v1/text/generate",payload={
+    async def generate(self, messages, limit, response_schema, *, run_id=None, timeout_seconds=None):
+        payload = {
             "messages":messages,"max_output_tokens":limit,"response_schema":response_schema,
-        },run_id=run_id,timeout=None)
+        }
+        if timeout_seconds is not None:
+            payload["timeout_seconds"] = timeout_seconds
+        deadline = min(timeout_seconds + 10, self.http.timeout.read) if timeout_seconds is not None else None
+        try:
+            async with asyncio.timeout(deadline):
+                result = await self.request("POST","/internal/v1/text/generate",payload=payload,run_id=run_id,timeout=None)
+        except TimeoutError:
+            raise ModelError("MODEL_TIMEOUT","模型请求超时，未确认的积分预授权待核对",uncertain=True) from None
         usage = parse_usage(result.get("usage"))
         if not usage:
             raise ModelError("MODEL_USAGE_MISSING","模型没有返回可信用量，预授权积分待核对",uncertain=True)

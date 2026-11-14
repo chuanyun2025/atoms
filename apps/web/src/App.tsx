@@ -134,7 +134,7 @@ function Workspace(){
   useEffect(()=>{
     const chat=bottom.current?.parentElement;
     chat?.scrollTo({top:chat.scrollHeight});
-  },[messages,busy,progress.length]);
+  },[messages,busy,progress?.events.length]);
   useEffect(()=>{
     if(busy&&run&&!active(run))void refresh();
   },[busy,run?.status,refresh]);
@@ -210,12 +210,12 @@ function Workspace(){
           </div>}
         </article>;
       })}
-      <RunProgress events={progress} stage={run?.stage} busy={busy}
+      <RunProgress events={progress?.events??[]} stage={run?.stage} eventSeq={run?.event_seq} connection={progress?.connection} busy={busy}
         onCode={source?()=>switchTab("code"):undefined}
         onPreview={draftPreview?()=>switchTab("preview"):undefined}/>
       <div ref={bottom}/></div>
       <div className="chat-compose-area">{wallet&&wallet.available_units<100&&<div className="capability-warning">可用积分不足；已有预览、版本和导出仍可使用。</div>}{!cap?.model_configured&&<div className="capability-warning"><AlertCircle size={15}/><span>模型待配置，连接后即可生成应用。</span></div>}{cap?.read_only&&<div className="capability-warning">系统维护中，当前只读。</div>}{error&&<div className="inline-error" role="alert">{error}<button aria-label="关闭错误" onClick={()=>setError("")}><X size={13}/></button></div>}
-      <form className="chat-composer" onSubmit={submit}><label className="sr-only" htmlFor="chat-prompt">描述需求或修改</label><textarea id="chat-prompt" placeholder={project?.current_version_id?"描述下一步修改…":"详细描述你想创建的应用…"} maxLength={100000} value={prompt} onChange={e=>setPrompt(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&(e.ctrlKey||e.metaKey)){e.preventDefault();e.currentTarget.form?.requestSubmit()}}}/><div><span>{busy?"构建期间可以离开此页面":project?.current_version_id?"基于当前版本继续构建":"准备好，就开始吧"}<span className="prompt-length">{prompt.length}/100000</span></span><button aria-label="提交需求" disabled={!prompt.trim()||sending||busy||(wallet?.available_units??0)<100||!cap?.model_configured||!cap?.worker_available||cap?.read_only}>{sending?<LoaderCircle size={16} className="spin"/>:<ArrowUp size={18}/>}</button></div></form><p className="chat-footnote">Ctrl / ⌘ + Enter 发送 · AI 生成结果请实际验证</p></div></section>
+      <form className="chat-composer" onSubmit={submit}><label className="sr-only" htmlFor="chat-prompt">描述需求或修改</label><textarea id="chat-prompt" placeholder={project?.current_version_id?"描述下一步修改…":"详细描述你想创建的应用…"} maxLength={100000} value={prompt} onChange={e=>setPrompt(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&(e.ctrlKey||e.metaKey)){e.preventDefault();e.currentTarget.form?.requestSubmit()}}}/><div><span>{busy?"构建期间可以离开此页面":project?.current_version_id?"基于当前版本继续构建":"准备好，就开始吧"}{!busy&&prompt.length>0&&<span className="prompt-length">{prompt.length} / 100000 字</span>}</span><button aria-label="提交需求" disabled={!prompt.trim()||sending||busy||(wallet?.available_units??0)<100||!cap?.model_configured||!cap?.worker_available||cap?.read_only}>{sending?<LoaderCircle size={16} className="spin"/>:<ArrowUp size={18}/>}</button></div></form><p className="chat-footnote">Ctrl / ⌘ + Enter 发送 · AI 生成结果请实际验证</p></div></section>
       <section className="build-panel"><div className="preview-toolbar">
         <div className="view-tabs">
           <button className={displayTab==="preview"?"selected":""} aria-pressed={displayTab==="preview"} disabled={!canPreview} onClick={()=>switchTab("preview")}><Eye size={15}/>预览</button>

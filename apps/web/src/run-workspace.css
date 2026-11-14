@@ -9,6 +9,7 @@
 }
 .run-progress-current { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 650; }
 .run-progress-current svg { color: #47775d; flex: none; }
+.run-connection { margin: 8px 0 0; color: #5c685b; font-size: 11px; line-height: 1.5; }
 .run-plan { margin-top: 11px; font-size: 12px; line-height: 1.65; }
 .run-plan p { margin: 0; }
 .run-plan ul { margin: 6px 0 0; padding-left: 18px; }

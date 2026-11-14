@@ -91,6 +91,37 @@ def test_video_submission_uncertainty_and_query_contract(monkeypatch):
     assert calls==["POST","GET"]
 
 
+def test_text_deadline_releases_gateway_slot(monkeypatch):
+    monkeypatch.setattr(settings(),"provider_gateway_token",TOKEN)
+    canceled=False
+    submitted=0
+
+    async def upstream(request):
+        nonlocal canceled,submitted
+        if request.method=="GET":
+            return httpx.Response(200,json={"data":[]})
+        submitted+=1
+        if submitted==1:
+            try:
+                await asyncio.sleep(30)
+            finally:
+                canceled=True
+        return httpx.Response(200,json={"choices":[{"message":{"content":"{}"}}],
+                                        "usage":{"prompt_tokens":3,"completion_tokens":2}})
+
+    async def check():
+        app=gateway(upstream,provider_max_concurrency=1)
+        async with app.router.lifespan_context(app), ProviderClient(transport=httpx.ASGITransport(app=app)) as client:
+            with pytest.raises(ModelError) as caught:
+                await client.generate(MESSAGES,300,None,timeout_seconds=1)
+            assert caught.value.code=="MODEL_TIMEOUT" and caught.value.uncertain
+            assert canceled
+            assert (await client.generate(MESSAGES,300,None,timeout_seconds=1)).content=="{}"
+
+    asyncio.run(check())
+    assert submitted==2
+
+
 def test_kms_secret_overrides_environment_and_is_cached(monkeypatch):
     config = ProviderSettings(provider_gateway_token=TOKEN, llm_api_key="test-fallback",
                               provider_kms_region="cn-hangzhou", llm_kms_secret_name="text-secret")

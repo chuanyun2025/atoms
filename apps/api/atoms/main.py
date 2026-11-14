@@ -196,7 +196,8 @@ def run_get(rid:str,user=Depends(visitor)):
         workspace=one(conn,"SELECT source_revision,digest IS NOT NULL AS has_preview FROM run_workspace WHERE run_id=:id",id=rid)
         if workspace:
             workspace["has_preview"]=bool(workspace["has_preview"])
-        return {**run,"workspace":workspace}
+        event_seq=one(conn,"SELECT COALESCE(MAX(seq),0) AS seq FROM run_events WHERE run_id=:id",id=rid)["seq"]
+        return {**run,"workspace":workspace,"event_seq":event_seq}
 
 
 @app.get("/api/v1/runs/{rid}/source")

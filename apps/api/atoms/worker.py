@@ -61,7 +61,10 @@ def recover_expired():
     with transaction(True) as conn:
         rows=all_rows(conn,"SELECT * FROM runs WHERE (status='running' AND (lease_until<:now OR started_at<:deadline)) OR (status='pending' AND created_at<:pending)",now=now,deadline=now-settings().run_timeout_seconds,pending=now-settings().pending_timeout_seconds)
         for row in rows:
-            timeout=row["status"]=="pending" or row["started_at"]<now-settings().run_timeout_seconds
+            if row["status"]=="pending":
+                fail_locked(conn,row,"failed","QUEUE_TIMEOUT","排队超时，生成服务未领取任务，请重新生成")
+                continue
+            timeout=row["started_at"]<now-settings().run_timeout_seconds
             fail_locked(conn,row,"failed" if timeout else "interrupted","TIMEOUT" if timeout else "WORKER_LOST",
                         "任务超过时限，请重试；上一可用版本已保留" if timeout else "生成服务已中断，请重试；上一可用版本已保留")
 
@@ -221,6 +224,10 @@ def fail(run,code,message,status="failed"):
     with transaction(True) as conn:
         current=one(conn,"SELECT * FROM runs WHERE id=:id",id=run["id"])
         guard(current,run["lease_token"])
+        if code=="MODEL_TIMEOUT":
+            phase={"planning":"规划","generating":"生成代码","repairing":"修复代码"}.get(current["stage"])
+            if phase:
+                message=phase+"时，"+message
         fail_locked(conn,current,status,code,message)
 
 

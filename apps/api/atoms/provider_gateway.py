@@ -32,6 +32,7 @@ class GenerationRequest(BaseModel):
     messages: list[GenerationMessage] = Field(min_length=1)
     max_output_tokens: Annotated[int, Field(strict=True,gt=0)]
     response_schema: dict | None = None
+    timeout_seconds: Annotated[int, Field(strict=True,gt=0)] | None = None
 
 
 class VideoRequest(BaseModel):
@@ -112,7 +113,7 @@ def create_app(config=None, *, transport=None):
         statuses = {"PROVIDER_UNAUTHORIZED":401,"PROVIDER_INVALID_REQUEST":400,
                     "PROVIDER_RATE_LIMIT":429,"PROVIDER_NOT_CONFIGURED":503,
                     "PROVIDER_SECRET_UNAVAILABLE":503,"VIDU_POLL_RETRY":503,
-                    "MODEL_AUTH":401,"MODEL_RATE_LIMIT":429}
+                    "MODEL_AUTH":401,"MODEL_RATE_LIMIT":429,"MODEL_TIMEOUT":504}
         return JSONResponse({"error":{"code":error.code,"message":str(error),"uncertain":error.uncertain,
                                       "usage":asdict(error.usage) if error.usage else None}},
                             status_code=statuses.get(error.code,502))
@@ -162,8 +163,15 @@ def create_app(config=None, *, transport=None):
         if data.max_output_tokens > await current_text_limit():
             raise ModelError("PROVIDER_INVALID_REQUEST","请求的输出长度超出模型配置")
         async def call():
-            return asdict(await chat_completions.complete(cfg,await key_for("llm"),[m.model_dump() for m in data.messages],
-                          data.max_output_tokens,data.response_schema,transport=transport))
+            key=await key_for("llm")
+            timeout=min(data.timeout_seconds or cfg.llm_request_timeout_seconds,cfg.llm_request_timeout_seconds)
+            try:
+                async with asyncio.timeout(timeout):
+                    result=await chat_completions.complete(cfg,key,[m.model_dump() for m in data.messages],
+                                   data.max_output_tokens,data.response_schema,transport=transport)
+            except TimeoutError:
+                raise ModelError("MODEL_TIMEOUT","模型请求超时，未确认的积分预授权待核对",uncertain=True) from None
+            return asdict(result)
         return await invoke(request,"text.generate",call)
 
     @app.post("/internal/v1/video/tasks",dependencies=private)

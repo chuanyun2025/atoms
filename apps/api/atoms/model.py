@@ -11,6 +11,11 @@ from .slide_decks import DeckContent
 from .provider_contract import ModelError, ModelResult, Usage
 from .provider_client import ProviderClient
 
+PLANNING_TIMEOUT = 45
+GENERATION_TIMEOUT = 180
+COMPLEX_GENERATION_TIMEOUT = 420
+REVIEW_TIMEOUT = 20
+
 @dataclass(frozen=True)
 class Prepared:
     messages: list
@@ -20,6 +25,7 @@ class Prepared:
     react_site: bool = False
     decision_role: str | None = None
     response_schema: dict | None = None
+    timeout_seconds: int = GENERATION_TIMEOUT
 
 
 async def native_output_limit():
@@ -34,8 +40,11 @@ async def prepare(context, repair, *, skill: GenerationSkill):
     messages=messages_for(context, repair, skill=skill)
     # A conservative financial authorization, not actual token billing or a context truncation.
     input_ceiling=len(compact(messages).encode("utf-8"))+1024
+    # Large requirements, source snapshots and repair candidates can take longer to regenerate.
+    complex_build=len(context["request"])>=6000 or input_ceiling>=64_000
     return Prepared(messages,input_ceiling,await native_output_limit(),
-                    slide_content=bool(context.get("slide_template")),react_site=context.get("site_format")=="react")
+                    slide_content=bool(context.get("slide_template")),react_site=context.get("site_format")=="react",
+                    timeout_seconds=COMPLEX_GENERATION_TIMEOUT if complex_build else GENERATION_TIMEOUT)
 
 async def prepare_decision(role: str, context: dict):
     from .orchestration import TaskPlan, TaskReview, decision_messages
@@ -43,7 +52,8 @@ async def prepare_decision(role: str, context: dict):
     messages=decision_messages(role,context)
     schema=(TaskPlan if role=="planner" else TaskReview).model_json_schema()
     return Prepared(messages,len(compact(messages).encode("utf-8"))+1024,
-                    min(4096,await native_output_limit()),decision_role=role,response_schema=schema)
+                    min(4096,await native_output_limit()),decision_role=role,response_schema=schema,
+                    timeout_seconds=PLANNING_TIMEOUT if role=="planner" else REVIEW_TIMEOUT)
 
 
 async def generate(prepared,output_tokens, *, run_id=None):
@@ -71,4 +81,5 @@ async def generate(prepared,output_tokens, *, run_id=None):
         schema = json.loads(path.read_text("utf-8"))
         schema.pop("$schema", None)
     async with ProviderClient() as provider:
-        return await provider.generate(prepared.messages, output_tokens, {"name":name,"schema":schema}, run_id=run_id)
+        return await provider.generate(prepared.messages, output_tokens, {"name":name,"schema":schema},
+                                       run_id=run_id, timeout_seconds=prepared.timeout_seconds)
