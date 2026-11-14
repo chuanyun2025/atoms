@@ -21,7 +21,7 @@ function publicationValues(slug:string):State{
 export default function Preview({pid,vid,exampleId,publication,reload,phone,onSaved}:PreviewProps){
   const [ticket,setTicket]=useState<Ticket>(),[error,setError]=useState(""),[ready,setReady]=useState(false);
   const snapshot=useRef<State|undefined>(undefined),frame=useRef<HTMLIFrameElement>(null),port=useRef<MessagePort|undefined>(undefined),disposed=useRef(false),timer=useRef<ReturnType<typeof setTimeout>|undefined>(undefined);
-  const initialized=useRef<string>();
+  const initialized=useRef<string|undefined>(undefined);
   const savedRef=useRef(onSaved); savedRef.current=onSaved;
   useEffect(()=>{
     let cancelled=false;
