@@ -21,11 +21,19 @@ HTML_POLICY=json.loads((Path(__file__).resolve().parents[3]/"shared/contracts/ht
 SYSTEM+="\nHTML 校验器的实际支持清单（与校验器共享同一配置）：\n允许标签："+HTML_POLICY["tags"]+"\n允许属性："+HTML_POLICY["attributes"]+"，以及 data-* 和 aria-*。list 可用于关联 datalist。URL 仍只允许页内锚点和支持的 data:image 图片；不要使用未列出的属性、事件属性或外部资源。"
 
 
+REPAIR_REASONING = (
+    "一步一步思考。根据反馈还原触发条件，沿源码定位第一个偏离预期的环节，"
+    "修正根因后复查同一路径和相关边界。"
+)
 REPAIR_INSTRUCTIONS = (
     "上一候选未通过真实校验。定位反馈中的字段、文件或代码，只修改解决问题所需的部分，"
     "保留已有交互和数据键。返回完整 JSON，其中三个文件都必须是 files 对象内的字符串。"
 )
-BUILD_REVIEW = """平台构建并打开预览，短测可识别的主要操作。实现时沿真实输入核对状态与可见反馈一致。收到具体失败反馈后修根因，返回修复后的完整产物。若同一个错误重复出现，换一种实现。若输出被截断，减少非必要代码并保留核心功能。"""
+BUILD_REASONING = (
+    "一步一步思考。先确定初始状态和核心操作，再把每个操作的输入、规则、状态更新和可见反馈接起来。"
+    "交付前沿这条路径核对正常操作、无效操作和适用的边界情况。"
+)
+BUILD_REVIEW = """平台构建并打开预览，短测可识别的主要操作。收到具体失败反馈后修根因，返回修复后的完整产物。若同一个错误重复出现，换一种实现。若输出被截断，减少非必要代码并保留核心功能。"""
 
 REACT_ARTIFACT = """用 React + TypeScript 实现原始需求。只返回完整 JSON。
 结构为 {"schema_version":"2","title":"中文标题，最多80字","summary":"实际实现，最多600字","files":{"src/App.tsx":"入口","src/styles.css":"完整 CSS","src/components/Example.tsx":"本地模块"}}。
@@ -41,12 +49,13 @@ REACT_SYSTEM = REACT_ARTIFACT + """
 
 SLIDE_CONTENT_SYSTEM = """你为网页幻灯片编写逐页内容。平台根据选定模板渲染页面和导航。
 只返回完整 JSON 对象。结构为 {"title":"演示标题","summary":"已编排内容的简短摘要","slides":[{"title":"该页标题","description":"该页的一句说明","items":[{"label":"短标题或指标名称","detail":"说明或数值及单位"}]}]}。
-按用户主题、听众和材料组织内容。用户指定页数时按其要求，否则按 slide_template.layout_sequence 的页数和用途。首屏页标题使用用户主题。每页一个结论，列表项宜简短，封面无需列表时使用空数组。
+一步一步思考。先确定听众要理解的结论，再按材料安排页面顺序，最后核对每页结论是否有内容支撑。用户指定页数时按其要求，否则按 slide_template.layout_sequence 的页数和用途。首屏页标题使用用户主题。每页一个结论，列表项宜简短，封面无需列表时使用空数组。
 使用用户给出的事实和数据。未提供的数字、日期、来源或结论标记待补充。title 最多 80 字，summary 最多 600 字。所有内容字段均为纯文本，不输出 HTML、CSS、JavaScript、Markdown 或代码方案。"""
 
 GAME_SYSTEM = REACT_ARTIFACT + """
 
-按 task_plan.rendering 实现游戏。dom 和 canvas2d 使用 2D 渲染，threejs 使用 3D 渲染。把规则状态与显示分开，按用户要求选择适合的操作和反馈。"""
+按 task_plan.rendering 实现游戏。dom 和 canvas2d 使用 2D 渲染，threejs 使用 3D 渲染。把规则状态与显示分开，按用户要求选择适合的操作和反馈。
+从初始状态演算几次连续主操作，逐步比较实际状态与规则预期。核对判断操作是否有效时用到的状态，确认有效操作能推进下一步，无效操作不会污染状态。若玩法有动画或输入锁，检查快速操作、动画结束和重新开始后，玩家能继续操作。"""
 
 def _slide_content_messages(context, repair, skill):
     messages = [
@@ -63,7 +72,8 @@ def _slide_content_messages(context, repair, skill):
             feedback["previous_content"] = previous
         messages.append({
             "role": "user",
-            "content": "请修正以下问题，返回完整的逐页内容 JSON。\n" + compact(feedback),
+            "content": "一步一步思考。按反馈核对相关页面、原始材料和模板用途，修正后复查相邻页面的逻辑。"
+                       "返回完整的逐页内容 JSON。\n" + compact(feedback),
         })
     return messages
 
@@ -73,7 +83,7 @@ def messages_for(context, repair, *, skill: GenerationSkill):
         return _slide_content_messages(context, repair, skill)
     react = context.get("site_format") == "react"
     game = react and skill.kind == "game"
-    sections = [GAME_SYSTEM if game else REACT_SYSTEM if react else SYSTEM, skill.instructions, BUILD_REVIEW]
+    sections = [GAME_SYSTEM if game else REACT_SYSTEM if react else SYSTEM, skill.instructions, BUILD_REASONING, BUILD_REVIEW]
     if context.get("task_plan"):
         sections.append("以原始需求为准，结合 task_plan 的实现要求和视觉方向。enhancements 是可选建议。")
     if game:
@@ -93,5 +103,5 @@ def messages_for(context, repair, *, skill: GenerationSkill):
             "按反馈修复 React 源码并返回完整 schema_version 2 JSON。保留组件、数据和已经实现的交互。"
             if react else REPAIR_INSTRUCTIONS
         )
-        messages.append({"role": "user", "content": instructions + "\n" + compact(repair)})
+        messages.append({"role": "user", "content": REPAIR_REASONING + instructions + "\n" + compact(repair)})
     return messages
