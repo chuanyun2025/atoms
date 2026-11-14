@@ -146,10 +146,24 @@ test("手动源码保存返回打包错误，修正后更新预览和版本",asy
   await page.getByRole("button",{name:"代码",exact:true}).click();
   await expect(editor).toHaveText(invalid);
   await editor.fill(original.replace("增加一次","手动加一"));
-  await editor.press("Control+s");
-  await expect(page.getByText("已保存为 v2",{exact:true})).toBeVisible();
-  await page.getByRole("button",{name:"预览",exact:true}).click();
-  await expect(preview.getByRole("button",{name:"手动加一"})).toBeVisible();
+  const projectPath="/api/v1"+new URL(page.url()).pathname;
+  let releaseRefresh!:()=>void;
+  const refreshBlocked=new Promise<void>(resolve=>{releaseRefresh=resolve});
+  // Simulate a slow project request after the save has already succeeded.
+  await page.route(url=>url.pathname===projectPath,async route=>{
+    await refreshBlocked;
+    await route.continue();
+  });
+  try{
+    await editor.press("Control+s");
+    await expect(page.getByRole("status").filter({hasText:"源码已保存为 v2"})).toBeVisible();
+    await expect(page.getByRole("button",{name:"预览",exact:true})).toHaveAttribute("aria-pressed","true");
+    await expect(page.getByRole("button",{name:"v2",exact:true})).toBeVisible();
+    await expect(preview.getByRole("button",{name:"手动加一"})).toBeVisible();
+  }finally{
+    releaseRefresh();
+    await page.unrouteAll({behavior:"wait"});
+  }
   await page.getByRole("button",{name:"版本记录",exact:true}).click();
   await expect(page.locator(".history-item").filter({hasText:"版本 2"})).toContainText("手动编辑源码");
   await page.locator(".history-item").filter({hasText:"版本 1"}).click();

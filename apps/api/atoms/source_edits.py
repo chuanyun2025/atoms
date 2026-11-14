@@ -20,16 +20,21 @@ def request_fingerprint(pid, vid, data, key):
     return hashlib.sha256(body.encode()).hexdigest()
 
 
-def replay_version(conn, owner, pid, key, fingerprint):
+def source_save_result(version, project):
+    return {**service.public_version(version, True), "project": project}
+
+
+def replay_version(conn, project, key, fingerprint):
     previous = one(
         conn, """SELECT k.request_hash,r.result_version_id FROM request_keys k
             JOIN runs r ON r.id=k.run_id WHERE k.owner_id=:owner AND k.key=:key""",
-        owner=owner, key=key,
+        owner=project["owner_id"], key=key,
     )
     if previous:
         if previous["request_hash"] != fingerprint:
             service.error(409, "idempotency_conflict", "此保存凭证已用于其他请求，请重新编辑后保存")
-        return service.public_version(service.owned_version(conn, pid, previous["result_version_id"]), True)
+        version = service.owned_version(conn, project["id"], previous["result_version_id"])
+        return source_save_result(version, project)
 
 
 def check_base(project, vid, revision):
@@ -44,7 +49,7 @@ def source_artifact(owner, pid, vid, data, key):
     with transaction() as conn:
         project = service.project(conn, pid, owner)
         fingerprint = request_fingerprint(pid, vid, data, key)
-        replay = replay_version(conn, owner, pid, key, fingerprint)
+        replay = replay_version(conn, project, key, fingerprint)
         if replay:
             return replay, None, None
         service.mutable(conn)
@@ -57,7 +62,7 @@ def source_artifact(owner, pid, vid, data, key):
     if data.files.keys() - files.keys():
         service.error(422, "unknown_source_file", "只能编辑此版本已有的文件")
     if all(files[path] == value for path, value in data.files.items()):
-        return service.public_version(base, True), None, None
+        return source_save_result(base, project), None, None
     files.update(data.files)
     artifact["summary"] = "手动编辑源码"
     return None, artifact, project["kind"]
@@ -95,7 +100,7 @@ def save_source_version(owner, pid, vid, data, key, artifact, validation):
     fingerprint = request_fingerprint(pid, vid, data, key)
     with transaction(True) as conn:
         project = service.project(conn, pid, owner)
-        replay = replay_version(conn, owner, pid, key, fingerprint)
+        replay = replay_version(conn, project, key, fingerprint)
         if replay:
             return replay
         service.mutable(conn)
@@ -117,4 +122,4 @@ def save_source_version(owner, pid, vid, data, key, artifact, validation):
             owner=owner, key=key, fingerprint=fingerprint, rid=rid, now=now,
         )
         add_event(conn, rid, "completed", {"version_id": result, "version_number": number, "message": artifact["summary"]})
-        return service.public_version(service.owned_version(conn, pid, result), True)
+        return source_save_result(service.owned_version(conn, pid, result), service.project(conn, pid, owner))

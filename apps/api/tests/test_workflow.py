@@ -221,9 +221,15 @@ def test_manual_source_save_keeps_invalid_files_out_of_version_history(client, m
     assert saved.status_code==200,saved.text
     result=saved.json()
     assert result["number"]==2 and result["parent_version_id"]==p["current_version_id"]
+    assert result["project"]["current_version_id"]==result["id"]
+    assert result["project"]["revision"]==p["revision"]+1
     assert result["artifact"]["files"]=={**ARTIFACT["files"],**valid["files"]}
     assert client.get(versions+"/"+p["current_version_id"]).json()["artifact"]==ARTIFACT
-    assert client.post(path,json=valid,headers=headers).json()["id"]==result["id"]
+    assert client.post(path,json=valid,headers=headers).json()==result
+    current_path=versions+"/"+result["id"]+"/source"
+    unchanged=client.post(current_path,json={**valid,"expected_revision":result["project"]["revision"]},
+                          headers={"Idempotency-Key":"manual-source-no-changes"})
+    assert unchanged.status_code==200 and unchanged.json()==result
     assert client.post(path,json=valid,headers={"Idempotency-Key":"manual-source-2"}).status_code==409
     assert len(candidates)==2
     with transaction() as conn:

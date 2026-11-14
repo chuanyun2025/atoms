@@ -82,7 +82,8 @@ function Workspace(){
   const [collapsed,setCollapsed]=useState(true),[prompt,setPrompt]=useState(()=>sessionStorage.getItem("atoms:draft:"+pid)||""),[error,setError]=useState(()=>sessionStorage.getItem("atoms:startup-error:"+pid)||""),[sending,setSending]=useState(false);
   const [tab,setTab]=useState<"preview"|"code"|null>(null),[selected,setSelected]=useState<string|null>(null),[phone,setPhone]=useState(false),[reload,setReload]=useState(0),[saved,setSaved]=useState("已保存"),[history,setHistory]=useState(false),[restore,setRestore]=useState<Version>(),[restoring,setRestoring]=useState(false),[mobileView,setMobileView]=useState("preview");
   const [edits,setEdits]=useState<Record<string,Record<string,string>>>({});
-  const [sourceResult,setSourceResult]=useState<{vid:string;error?:string;number?:number}>();
+  const [sourceError,setSourceError]=useState<{vid:string;message:string}>();
+  const [savedSource,setSavedSource]=useState<{number:number;changed:boolean}>();
   const [savingSource,setSavingSource]=useState(false);
   const sourceRequest=useRef<{body:string;key:string}>(null);
   const bottom=useRef<HTMLDivElement>(null);
@@ -113,7 +114,7 @@ function Workspace(){
     &&!source&&!historical&&!busy&&!cap?.read_only;
   const currentEdits=vid&&!source?edits[vid]??emptyEdits:emptyEdits;
   const hasEdits=Object.keys(currentEdits).length>0;
-  const saveResult=sourceResult?.vid===vid?sourceResult:undefined;
+  const saveError=sourceError&&sourceError.vid===vid?sourceError.message:undefined;
   const switchTab=(next:"preview"|"code")=>{setTab(next);setMobileView("preview")};
   const versionsByRun=new Map(versions?.items.map(item=>[item.source_run_id,item]));
   const recoveredRuns=new Set<string>();
@@ -156,7 +157,8 @@ function Workspace(){
       else next[path]=value;
       return {...previous,[vid]:next};
     });
-    setSourceResult(undefined);
+    setSourceError(undefined);
+    setSavedSource(undefined);
   }
   async function saveSource(){
     if(!project||!vid||!editableSource||!hasEdits||savingSource||sending||restoring)return;
@@ -164,21 +166,35 @@ function Workspace(){
     const body=JSON.stringify([vid,payload]);
     if(sourceRequest.current?.body!==body)sourceRequest.current={body,key:key()};
     setSavingSource(true);
-    setSourceResult(undefined);
+    setSourceError(undefined);
+    setSavedSource(undefined);
     try{
-      const result=await api<Version>("/projects/"+pid+"/versions/"+vid+"/source","POST",payload,
-        {"Idempotency-Key":sourceRequest.current.key});
+      const {project:updatedProject,...result}=await api<Version & {project:Project}>(
+        "/projects/"+pid+"/versions/"+vid+"/source","POST",payload,{"Idempotency-Key":sourceRequest.current.key});
+      const projectKey=["project",pid];
+      await client.cancelQueries({queryKey:projectKey,exact:true});
       client.setQueryData(["version",pid,result.id],result);
-      await refresh();
+      client.setQueryData<Project>(projectKey,current=>
+        current&&(current.revision>updatedProject.revision||
+          current.revision===updatedProject.revision&&current.updated_at>updatedProject.updated_at)
+          ? current : updatedProject);
+      setSelected(null);
+      setHistory(false);
+      switchTab("preview");
       sourceRequest.current=null;
       setEdits(previous=>{
         const next={...previous};
         delete next[vid];
         return next;
       });
-      setSourceResult({vid:result.id,number:result.number});
+      setSavedSource({number:result.number,changed:result.id!==vid});
+      void Promise.all([
+        client.invalidateQueries({queryKey:projectKey,exact:true}),
+        client.invalidateQueries({queryKey:["projects"]}),
+        client.invalidateQueries({queryKey:["versions",pid]}),
+      ]);
     }catch(e){
-      setSourceResult({vid,error:e instanceof ApiError?e.message:"保存连接中断，请重新保存。草稿已保留。"});
+      setSourceError({vid,message:e instanceof ApiError?e.message:"保存连接中断，请重新保存。草稿已保留。"});
     }finally{
       setSavingSource(false);
     }
@@ -283,14 +299,20 @@ function Workspace(){
       {historical&&<div className="history-banner"><History size={14}/><span>正在查看历史 v{version?.number}，业务数据只读</span><button onClick={()=>setSelected(null)}>回到当前</button><button disabled={busy||savingSource||cap?.read_only} onClick={()=>version&&setRestore(version)}>恢复此版本</button></div>}
       {displayTab==="code"&&files&&!source&&(editableSource||hasEdits)&&<div className="source-tools">
         <div className="source-toolbar">
-          <span role="status">{savingSource?"正在校验并打包…":hasEdits?"有未保存的修改":saveResult?.number?"已保存为 v"+saveResult.number:"编辑后可保存为新版本"}</span>
+          <span role="status">{savingSource?"正在校验并打包…":hasEdits?"有未保存的修改":"编辑后可保存为新版本"}</span>
           <button type="button" disabled={!editableSource||!hasEdits||savingSource||sending||restoring} onClick={()=>void saveSource()}>
             {savingSource?<LoaderCircle size={15} className="spin"/>:<Save size={15}/>}保存源码
           </button>
         </div>
-        {saveResult?.error&&<div className="source-diagnostic" role="alert">
-          <strong>保存失败，修改已保留</strong><pre>{saveResult.error}</pre>
+        {saveError&&<div className="source-diagnostic" role="alert">
+          <strong>保存失败，修改已保留</strong><pre>{saveError}</pre>
         </div>}
+      </div>}
+      {savedSource&&<div className="source-saved-notice">
+        <div role="status"><CheckCircle2 size={16} aria-hidden="true"/>
+          {savedSource.changed?"源码已保存为 v"+savedSource.number:"源码已是最新，无需创建版本"}
+        </div>
+        <button type="button" className="icon-button" aria-label="关闭保存提示" onClick={()=>setSavedSource(undefined)}><X size={15}/></button>
       </div>}
       <div className="build-content">
         {displayTab==="code"&&files?<Suspense fallback={<div className="preview-loading">正在加载代码编辑器…</div>}>
