@@ -184,19 +184,23 @@ test("连续试玩要求实际状态变化，支持棋盘序列并识别自行�
   const script={checks:[
     {label:"移动后棋盘改变",key:"ArrowRight",signal:"board",change:"changed"},
     {label:"继续移动后棋盘改变",key:"ArrowLeft",signal:"board",change:"changed"},
+    {label:"重开恢复初始步数",control:"reset",signal:"moves",change:"equals",value:0},
   ]};
   const checks=readGamePlaytest({"src/game/playtest.json":JSON.stringify(script)},true)!;
-  await page.setContent(`<main data-game-phase="playing" data-playtest-board="0,2,0,0" data-playtest-clock="0"><output>棋盘</output></main>
+  await page.setContent(`<main data-game-phase="playing" data-playtest-board="0,2,0,0" data-playtest-clock="0" data-playtest-moves="0">
+    <output>棋盘</output><button data-game-input="reset">重开</button></main>
     <script>
       const board = document.querySelector("main");
       window.addEventListener("keydown", event=>{
+        board.dataset.playtestMoves=String(Number(board.dataset.playtestMoves)+1);
         if (event.key==="ArrowRight") board.dataset.playtestBoard="0,0,0,2";
         if (event.key==="ArrowLeft") board.dataset.playtestBoard="2,0,0,0";
       });
+      document.querySelector("button").onclick=()=>{board.dataset.playtestMoves="0"};
       setInterval(()=>board.dataset.playtestClock=String(Number(board.dataset.playtestClock)+1),25);
     </script>`);
   const report=await runGamePlaytest(page.mainFrame(),checks);
-  expect(report.steps).toMatchObject([{after:"0,0,0,2"},{before:"0,0,0,2",after:"2,0,0,0"}]);
+  expect(report.steps).toMatchObject([{after:"0,0,0,2"},{before:"0,0,0,2",after:"2,0,0,0"},{before:"2",after:"0"}]);
   await expect(runGamePlaytest(page.mainFrame(),checks.map(check=>({...check,signal:"clock"}))))
     .rejects.toThrow(/在输入前已自行变化/);
 });

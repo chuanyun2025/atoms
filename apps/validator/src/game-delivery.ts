@@ -11,11 +11,21 @@ export function readGamePlaytest(files: Record<string, unknown> | undefined, req
   let checks: unknown;
   try { checks = JSON.parse(source)?.checks; }
   catch { throw new Error(path + " 必须是有效的 JSON"); }
-  const normalized = Array.isArray(checks) ? checks.map(check => ({hold_ms:0, min_delta:0.01, ...check})) : checks;
-  if (!validInputChecks(normalized) || normalized.length > 3 ||
-      normalized.filter(check => check.change !== "unchanged").length < 2 ||
-      normalized.some(check => check.fresh_start)) {
-    throw new Error(path + " 需要 2 至 3 个有效的连续操作，至少两项应观察到实际玩法状态变化");
+  if (!Array.isArray(checks) || checks.length < 2 || checks.length > 3) {
+    throw new Error(path + " 的 checks 需要 2 至 3 个连续操作");
+  }
+  const normalized = checks.map((check, index) => {
+    const step = {hold_ms:0, min_delta:0.01, ...check};
+    if (step.change === "equals" && (typeof step.value === "number" || typeof step.value === "boolean")) {
+      step.value = String(step.value);
+    }
+    if (!validInputChecks([step]) || step.fresh_start) {
+      throw new Error(path + " 第 " + (index+1) + " 项格式无效：指定一个输入、signal 和 change；仅 equals 提供 value");
+    }
+    return step as InputCheck;
+  });
+  if (normalized.filter(check => check.change !== "unchanged").length < 2) {
+    throw new Error(path + " 至少两项应观察到实际玩法状态变化");
   }
   return normalized;
 }

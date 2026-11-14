@@ -59,7 +59,7 @@ GAME_SYSTEM = REACT_ARTIFACT + """
 
 随游戏提供 src/game/playtest.json，声明从正常开局出发的连续试玩。格式示例
 {"checks":[{"label":"主操作推进局势","control":"primary","signal":"progress","change":"increase","min_delta":1},{"label":"下一步继续推进","control":"primary","signal":"progress","change":"increase","min_delta":1}]}。
-按本作机制替换示例。写 2 至 3 项按顺序执行的检查。每项指定一个真实输入，使用按钮 control、键盘键 key（例如 ArrowRight、Space、w）或画布主鼠标键 pointer（值为 primary）。持续操作可用 hold_ms（0 至 1200 毫秒），组合键可加 with_key。change 支持 increase、decrease、changed、equals 或 unchanged。数字增减可给 min_delta，equals 需要 value。至少两项要观察到实际玩法状态变化。后续检查从上一步结束的状态继续。若一步即可正常结束，可检查重开回到可玩状态。
+按本作机制替换示例。写 2 至 3 项按顺序执行的检查。每项指定一个真实输入，使用按钮 control、键盘键 key（例如 ArrowRight、Space、w）或画布主鼠标键 pointer（值为 primary）。持续操作可用 hold_ms（0 至 1200 毫秒），组合键可加 with_key。change 支持 increase、decrease、changed、equals 或 unchanged。数字增减可给 min_delta，equals 需要 value，可写字符串、数字或布尔值。至少两项要观察到实际玩法状态变化。后续检查从上一步结束的状态继续。若一步即可正常结束，可检查重开回到可玩状态。
 在唯一可见的游戏根节点添加 data-game-phase。用 data-playtest-<signal> 暴露实际游戏状态，例如棋盘内容、角色位置、分数、进度或玩法阶段。给被检查的正常可见按钮设置 data-game-input，值对应 control。若需要点击开局，给开始按钮加 data-game-start，倒计时结束后将阶段设为 playing。若只用键盘开局，试玩第一项可以检查按下开始键后状态进入 playing，另两项执行核心玩法。检查应能在不同随机开局下稳定完成。选择真正改变局势的操作，状态值不要使用按键次数、纯动画或自然倒计时。修复时保留试玩对核心行为的覆盖。若反馈指出程序操作失败，修复玩法，保留该操作和预期结果。只有检查本身与真实玩法不符时才修正检查。"""
 
 def _slide_content_messages(context, repair, skill):
