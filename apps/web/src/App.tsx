@@ -10,6 +10,7 @@ import {StudioLanding,StudioHeader,ProjectLibrary,useProjects,useCapabilities} f
 const LazyCode=lazy(()=>import("./Code"));
 function Code({files}:{files:Record<string,string>}){return <Suspense fallback={<div className="preview-loading">正在加载代码查看器…</div>}><LazyCode files={files}/></Suspense>}
 import Preview from "./Preview";
+import PublishedPage,{PublishButton} from "./Publication";
 import BuildFailure from "./BuildFailure";
 import SlideTemplateDetail from "./SlideTemplateDetail";
 import {VideoStudio,VideoWorkspace} from "./VideoStudio";
@@ -164,6 +165,7 @@ function Workspace(){
         <span className="autosave"><CheckCircle2 size={14}/>项目已保存</span>
         <button aria-label="版本记录" className={"plain-button "+(history?"pressed":"")} onClick={()=>setHistory(!history)}><History size={16}/><span>版本记录</span></button>
         {vid&&<a className="export-button" href={"/api/v1/projects/"+pid+"/versions/"+vid+"/export"}><Download size={15}/><span>导出源码</span></a>}
+        {vid&&(project?.kind==="web"||project?.kind==="game")&&<PublishButton pid={pid} versionId={vid} versionNumber={version?.number} readOnly={cap?.read_only}/>}
       </div>
     </header>
     <div className="mobile-work-tabs"><button className={mobileView==="chat"?"selected":""} onClick={()=>setMobileView("chat")}>对话</button><button className={mobileView==="preview"?"selected":""} onClick={()=>setMobileView("preview")}>应用</button></div>
@@ -211,6 +213,7 @@ function WorkspaceRoute(){
 }
 export default function App(){
   return <Routes>
+    <Route path="/p/:slug" element={<PublishedPage/>}/>
     {creationKinds.map(kind=><Route key={kind} path={modes[kind].path} element={<StudioRoute kind={kind}/>}/>)}
     <Route path="/slides/templates/:templateId" element={<StudioRoute kind="slides"><SlideTemplateDetail/></StudioRoute>}/>
     <Route path="/projects" element={<StudioRoute/>}/>

@@ -153,7 +153,7 @@ def test_backup_and_offline_restore_include_native_media(client,monkeypatch,tmp_
     backup=tmp_path/"video-backup.db"
     monkeypatch.setattr(sys,"argv",["ops","backup",str(backup)])
     ops.main()
-    assert ops.inspect_backup(backup)["schema"]=="0008"
+    assert ops.inspect_backup(backup)["schema"]=="0009_publish"
     with transaction(True) as conn:
         asset=one(conn,"SELECT * FROM media_assets WHERE project_id=:pid AND mime_type='video/mp4'",pid=project["id"])
         execute(conn,"UPDATE worker_status SET lease_until=0")

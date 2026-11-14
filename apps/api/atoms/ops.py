@@ -25,7 +25,7 @@ def inspect_backup(path,media_directory=None):
         if source.execute("PRAGMA integrity_check").fetchone()[0]!="ok":
             raise ValueError("备份完整性检查失败")
         version=source.execute("SELECT version_num FROM alembic_version").fetchone()[0]
-        if version not in {"0007","0008"}:
+        if version not in {"0007","0008","0009_publish"}:
             raise ValueError("备份数据库版本不受当前程序支持，请先核对对应代码版本")
         projects=source.execute("SELECT count(*) FROM projects").fetchone()[0]
         source.row_factory=sqlite3.Row
@@ -129,7 +129,7 @@ def main():
     with closing(sqlite3.connect("file:"+path.as_posix()+"?mode=ro",uri=True)) as source,closing(sqlite3.connect(temp)) as target:
         source.backup(target)
         target.execute("UPDATE worker_status SET lease_token=NULL,lease_until=0,heartbeat_at=0,state='offline',model_configured=0")
-        if report["schema"] == "0008":
+        if report["schema"] != "0007":
             target.execute("UPDATE worker_status SET video_configured=0,text_model=NULL")
         target.execute("UPDATE model_calls SET status='uncertain',error_code='RESTORED_WITHOUT_USAGE' WHERE status='in_flight'")
         target.execute("UPDATE media_calls SET status='uncertain',error_code='RESTORED_WITHOUT_USAGE' WHERE status='in_flight'")

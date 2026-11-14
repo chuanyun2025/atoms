@@ -14,6 +14,7 @@ from . import service
 from . import credits
 from .preview import render_document, csp, export_zip
 from .examples import compiled_example
+from .publication import router as publication_router
 
 
 @asynccontextmanager
@@ -33,6 +34,7 @@ async def lifespan(app):
 
 
 app = FastAPI(title="Atoms Demo API",version="0.1.0",lifespan=lifespan,docs_url="/api/docs" if settings().app_env != "production" else None,redoc_url=None)
+app.include_router(publication_router)
 
 
 @app.middleware("http")

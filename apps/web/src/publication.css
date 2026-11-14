@@ -1,0 +1,30 @@
+.publish-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 8px 12px;
+  border: 1px solid #b8c7f3;
+  border-radius: 6px;
+  color: #294bb7;
+  background: #edf2ff;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.publish-button:hover { background: #e3ebff; }
+.publish-button:focus-visible,.publish-link :is(a,button,input):focus-visible { outline: 2px solid #3459dc; outline-offset: 2px; }
+.publish-state { font-weight: 650; color: #294375; }
+.publish-link { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.publish-link input { flex: 1 0 100%; min-width: 0; padding: 9px; border: 1px solid #d6def3; border-radius: 5px; color: #30446b; }
+.publish-link :is(a,button) { display: inline-flex; align-items: center; gap: 4px; padding: 5px; color: #294bb7; font-size: 12px; }
+.publish-actions { display: flex; justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.publish-error { color: #962c36; }
+.publish-notice { color: #32654c; }
+.publication-page { width: 100%; height: 100dvh; }
+.publication-message { min-height: 100dvh; display: grid; align-content: center; justify-items: center; gap: 14px; padding: 22px; background: #f4f6fc; color: #30446b; text-align: center; }
+.publication-message h1 { margin: 0; font-size: 22px; }
+@media (max-width: 700px) {
+  .workspace-actions .publish-button { padding: 6px 7px; gap: 3px; }
+  .workspace-actions .publish-button svg { width: 13px; }
+}
