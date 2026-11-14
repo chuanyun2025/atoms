@@ -84,9 +84,6 @@ async def validate_source(artifact, kind):
         if validation.get("ok") is False and isinstance(diagnostic, str) and diagnostic:
             service.error(422, "source_validation_failed", diagnostic[:2000])
         report = validation.get("report")
-        smoke = report.get("smoke", {}) if isinstance(report, dict) else {}
-        if smoke.get("status") == "issue":
-            service.error(422, "source_validation_failed", smoke.get("diagnostic", "操作检查未通过"))
         compiled = validation.get("compiled")
         required = ("body_html", "css_base64", "js_base64", "digest", "compiler_version", "sdk_version")
         if (validation.get("ok") is True and isinstance(report, dict) and report.get("ready") is True

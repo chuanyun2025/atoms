@@ -98,7 +98,7 @@ def test_optional_planner_ideas_do_not_become_blocking_fps_requirements():
 def test_default_2d_game_repairs_a_candidate_using_threejs(client, monkeypatch):
     from atoms import model_fixture
     from test_retry import validator
-    from test_workflow import GAME_VALIDATION
+    from test_workflow import VALIDATION
 
     project = client.post("/api/v1/projects", json={
         "client_key": "racing-test-key", "title": "赛车", "kind": "game",
@@ -121,7 +121,7 @@ def test_default_2d_game_repairs_a_candidate_using_threejs(client, monkeypatch):
 
     monkeypatch.setattr(worker, "find_game_references", search)
     monkeypatch.setattr(worker, "paid_generate", generate)
-    validator(monkeypatch, [GAME_VALIDATION])
+    validator(monkeypatch, [VALIDATION])
     asyncio.run(worker.execute_run(run))
     assert client.get("/api/v1/runs/" + run["id"]).json()["status"] == "succeeded"
 
@@ -158,7 +158,7 @@ def test_specific_mechanics_route_before_broad_genre(request_text,genre):
 def test_game_research_and_template_reach_the_generation_pipeline(client, monkeypatch, request_text, genre, reference):
     from atoms import model_fixture
     from test_retry import validator
-    from test_workflow import GAME_VALIDATION
+    from test_workflow import VALIDATION
 
     project = client.post("/api/v1/projects", json={
         "client_key": "platformer-test-key", "title": "平台跳跃", "kind": "game",
@@ -203,7 +203,7 @@ def test_game_research_and_template_reach_the_generation_pipeline(client, monkey
     monkeypatch.setattr(worker, "agent_decision", decision)
     monkeypatch.setattr(worker, "paid_generate", generate)
     monkeypatch.setattr(worker, "find_game_references", search)
-    validator(monkeypatch, [GAME_VALIDATION])
+    validator(monkeypatch, [VALIDATION])
     asyncio.run(worker.execute_run(run))
     assert client.get("/api/v1/runs/" + run["id"]).json()["status"] == "succeeded"
 
@@ -212,7 +212,7 @@ def test_saved_plan_survives_recheck_failure_and_runtime_repair(client,monkeypat
     from atoms.db import compact, one, all_rows, transaction
     from atoms.model import ModelResult, Usage
     from test_retry import failed_candidate, retry, validator
-    from test_workflow import GAME_VALIDATION
+    from test_workflow import VALIDATION
 
     saved_plan=plan().model_copy(update={"experience":"website","rendering":"dom"})
     artifact={"schema_version":"2","title":"测试","summary":"已完成","files":{
@@ -232,7 +232,7 @@ def test_saved_plan_survives_recheck_failure_and_runtime_repair(client,monkeypat
 
     monkeypatch.setattr(worker,"agent_decision",real_agent_decision)
     monkeypatch.setattr(worker,"generate",generated)
-    validator(monkeypatch,[{"ok":False,"error":"需要修复"},GAME_VALIDATION])
+    validator(monkeypatch,[{"ok":False,"error":"需要修复"},VALIDATION])
     asyncio.run(worker.execute_run(run))
     assert client.get("/api/v1/runs/"+run["id"]).json()["status"]=="succeeded"
     with transaction() as conn:

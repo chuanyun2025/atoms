@@ -9,7 +9,7 @@ type InputCheck = {
   hold_ms: number;
   fresh_start?: boolean;
   signal: string;
-  change: "increase" | "decrease" | "unchanged" | "equals" | "changed";
+  change: "increase" | "decrease" | "unchanged" | "equals";
   min_delta: number;
   value?: string | null;
 };
@@ -31,13 +31,13 @@ export function validInputChecks(value: unknown): value is InputCheck[] {
       (check.fresh_start===undefined || typeof check.fresh_start==="boolean") &&
       typeof check.label==="string" && check.label.length>0 && check.label.length<=360 &&
       typeof check.signal==="string" && id.test(check.signal) &&
-      ["increase","decrease","unchanged","equals","changed"].includes(check.change) &&
+      ["increase","decrease","unchanged","equals"].includes(check.change) &&
       typeof check.min_delta==="number" && check.min_delta>0 && check.min_delta<=1_000_000 &&
       (check.change==="equals" ? typeof check.value==="string" && check.value.length<=360 : check.value==null);
   });
 }
 
-export async function checkInputs(frame: Frame, checks: InputCheck[], sampleIdle = false) {
+export async function checkInputs(frame: Frame, checks: InputCheck[]) {
   const game=frame.locator(selector);
   const {keyboard,mouse}=frame.page();
   const evidence=[];
@@ -45,7 +45,7 @@ export async function checkInputs(frame: Frame, checks: InputCheck[], sampleIdle
     const attribute="data-playtest-"+check.signal;
     const initial=await frame.waitForFunction(({selector,attribute,change})=>{
       const value=document.querySelector(selector)?.getAttribute(attribute);
-      if (value==null || (!["equals","changed"].includes(change) && (value.trim()==="" || !Number.isFinite(Number(value))))) return false;
+      if (value==null || (change!=="equals" && (value.trim()==="" || !Number.isFinite(Number(value))))) return false;
       return {value};
     },{selector,attribute,change:check.change},{timeout:1400,polling:25}).catch(()=>{
       throw new Error(`实际试玩「${check.label}」缺少状态 ${attribute}`);
@@ -54,17 +54,11 @@ export async function checkInputs(frame: Frame, checks: InputCheck[], sampleIdle
     await initial.dispose();
     if (!snapshot) throw new Error(`实际试玩「${check.label}」缺少状态 ${attribute}`);
     const before=snapshot.value;
-    if (sampleIdle) {
-      await frame.waitForTimeout(140);
-      const idle=await game.getAttribute(attribute,{timeout:700});
-      if (idle!==before) throw new Error(`${check.signal} 在输入前已自行变化，请使用与该操作直接相关的游戏状态`);
-    }
     async function observe(timeout: number) {
       const result=await frame.waitForFunction(({selector,attribute,before,check})=>{
       const after=document.querySelector(selector)?.getAttribute(attribute);
       if (after==null) return false;
       if (check.change==="equals") return before!==after && after===check.value ? {after} : false;
-      if (check.change==="changed") return before!==after ? {after} : false;
       if (after.trim()==="" || !Number.isFinite(Number(after))) return false;
       const delta=Number(after)-Number(before);
       if (check.change==="increase" && delta>=check.min_delta || check.change==="decrease" && delta<=-check.min_delta ||
@@ -101,10 +95,10 @@ export async function checkInputs(frame: Frame, checks: InputCheck[], sampleIdle
 
     if (check.change==="unchanged") await frame.waitForTimeout(250);
     match ||= await observe(1600).catch(async()=>{
-      const after=await game.first().getAttribute(attribute,{timeout:500}).catch(()=>null);
+      const after=await game.getAttribute(attribute);
       const input=check.key??check.control??check.pointer;
       const operation=check.hold_ms ? `按住 ${check.hold_ms}ms` : "短按";
-      const message=`实际试玩「${check.label}」未达到 ${check.change}（${operation} ${input}），${check.signal} 从 ${before.slice(0,160)} 变为 ${after?.slice(0,160)??"缺失"}`;
+      const message=`实际试玩「${check.label}」未达到 ${check.change}（${operation} ${input}），${check.signal} 从 ${before} 变为 ${after}`;
       const delta=after?.trim() ? Number(after)-Number(before) : NaN;
       if (check.signal.startsWith("screen-") && ((check.change==="increase" && delta<=-check.min_delta) ||
           (check.change==="decrease" && delta>=check.min_delta))) throw new OppositeInputError(message);

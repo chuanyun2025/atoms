@@ -7,12 +7,11 @@ import {checkFps,FPS_CHECK} from "./fps-check.js";
 import {checkRace,RACE_CHECK} from "./race-check.js";
 import type {InputCheck} from "./input-checks.js";
 import {smokeGame} from "./game-smoke.js";
-import {runGamePlaytest} from "./game-delivery.js";
 import {deliverySmoke,type PreviewKind} from "./delivery-smoke.js";
 
 class BrowserUnavailable extends Error {}
 
-export async function probe(compiled: Compiled, origin: string, behaviorCheck?: typeof SLIDES_NAVIGATION | typeof GAME_PLAY, gameReplay: string[] = [], experienceCheck?:typeof FPS_CHECK | typeof RACE_CHECK, gameChecks:InputCheck[] = [], requireWebgl=false, gameSmoke=false,allowUnconfirmedInput=false, options:{startupOnly?:boolean;lightweight3d?:boolean;previewKind?:PreviewKind;playtest?:InputCheck[]}={}) {
+export async function probe(compiled: Compiled, origin: string, behaviorCheck?: typeof SLIDES_NAVIGATION | typeof GAME_PLAY, gameReplay: string[] = [], experienceCheck?:typeof FPS_CHECK | typeof RACE_CHECK, gameChecks:InputCheck[] = [], requireWebgl=false, gameSmoke=false,allowUnconfirmedInput=false, options:{startupOnly?:boolean;lightweight3d?:boolean;previewKind?:PreviewKind}={}) {
   const instance_id = randomBytes(16).toString("hex"), channel_nonce = randomBytes(24).toString("hex");
   const candidate = origin + "/__atoms_candidate";
   const parent = origin + "/__atoms_parent";
@@ -85,15 +84,7 @@ export async function probe(compiled: Compiled, origin: string, behaviorCheck?: 
     if (!result.ready || result.errors.length || issues.length) throw new Error([...result.errors,...issues].join("; ") || "应用启动失败");
     const frame = page.frames().find(f => f.url() === candidate);
     if (options.previewKind) {
-      if (options.playtest && !frame) throw new Error("游戏预览在试玩前离开页面");
-      const smoke = frame && options.playtest
-        ? await runGamePlaytest(frame,options.playtest).catch(async error=>{
-            const errors = await runtimeErrors();
-            if (errors.length) throw new Error(errors.join("; "));
-            throw error;
-          })
-        : frame ? await deliverySmoke(frame,options.previewKind,options.lightweight3d ? 5500 : 3000)
-          : {status:"unconfirmed" as const};
+      const smoke = frame ? await deliverySmoke(frame,options.previewKind,options.lightweight3d ? 5500 : 3000) : {status:"unconfirmed" as const};
       const errors = await runtimeErrors();
       if (errors.length) throw new Error(errors.join("; "));
       return {ready:true,acceptance:"smoke" as const, sandbox_enabled:true,smoke};
@@ -162,8 +153,8 @@ if (process.argv.includes("--child")) {
   for await (const part of process.stdin) { const chunk=Buffer.from(part);size+=chunk.length;if(size>32*1024*1024)process.exit(2);chunks.push(chunk); }
   const text=Buffer.concat(chunks).toString("utf8");
   try {
-    const {compiled,origin,behaviorCheck,gameReplay,experienceCheck,gameChecks,requireWebgl,gameSmoke,allowUnconfirmedInput,startupOnly,lightweight3d,previewKind,playtest} = JSON.parse(text);
-    const report = await probe(compiled, origin, behaviorCheck, gameReplay,experienceCheck,gameChecks,requireWebgl,gameSmoke,allowUnconfirmedInput,{startupOnly,lightweight3d,previewKind,playtest});
+    const {compiled,origin,behaviorCheck,gameReplay,experienceCheck,gameChecks,requireWebgl,gameSmoke,allowUnconfirmedInput,startupOnly,lightweight3d,previewKind} = JSON.parse(text);
+    const report = await probe(compiled, origin, behaviorCheck, gameReplay,experienceCheck,gameChecks,requireWebgl,gameSmoke,allowUnconfirmedInput,{startupOnly,lightweight3d,previewKind});
     process.stdout.write(JSON.stringify({ok:true,report}));
   } catch (e) {
     process.stdout.write(JSON.stringify({ok:false,error:String((e as Error).message).slice(0,2000),

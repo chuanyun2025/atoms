@@ -68,9 +68,8 @@ test("失败后保留内容、一键继续修复、原生 datalist 与积分结�
   const firstRun=await (await firstAccepted).json();
   const card=page.getByTestId("build-failure");
   await expect(card.getByText("这次还没生成可用版本",{exact:true})).toBeVisible();
-  await expect(card.locator("pre")).toBeHidden();
-  await card.getByText("查看问题详情",{exact:true}).click();
-  await expect(card.locator("pre")).toContainText("缺少 schema_version");
+  await expect(card.getByText("查看问题详情",{exact:true})).toHaveCount(0);
+  await expect(card.locator("pre")).toHaveCount(0);
   expect(await (await page.request.get("/api/v1/runs/"+firstRun.id)).json()).toMatchObject({status:"failed",model_calls:3});
   await page.reload();
   await expect(card.getByRole("button",{name:"继续修复",exact:true})).toBeEnabled();

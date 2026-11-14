@@ -142,10 +142,7 @@ export default function App(){
             {"label":"左键向左移动","key":"ArrowLeft","signal":"screen-x","change":"decrease","min_delta":5},
             {"label":"右键向右移动","key":"ArrowRight","signal":"screen-x","change":"increase","min_delta":5},
         ]
-    check = {"label":"收集后晶体数量增加","control":"collect","signal":"score","change":"increase","min_delta":1}
-    checks = [check,check] if direction is None else design["playtest"]["checks"]
     return compact({"schema_version":"2","title":"晶体航线","summary":"收集三颗晶体并完成挑战。","files":{
-        "src/game/playtest.json":compact({"checks":checks}),
         "src/game/design.json":compact(design),
         "src/game/engine.ts":engine,
         "src/components/GameHud.tsx":"export default function GameHud({score,goal}){return <p>晶体 {score} / {goal}</p>}",
@@ -181,12 +178,6 @@ def test_artifact(context,repair):
                              incomplete_replay="[game-replay-repair]" in prompt and not repair,
                              direction=(1 if repair else -1) if "[game-input-repair]" in prompt else None,
                              unmarked_resume="[game-supplemental]" in prompt)
-        if "[game-stall]" in prompt and (not repair or "[repeat-stall]" in prompt):
-            import json
-            artifact = json.loads(game)
-            source=artifact["files"]["src/game/engine.ts"]
-            artifact["files"]["src/game/engine.ts"]=source.replace('route==="blocked"', 'route==="blocked" || game.actions>=1')
-            return compact(artifact)
         if ("[game-repair]" in prompt or "[game-click-error]" in prompt) and not repair:
             import json
             artifact = json.loads(game)
