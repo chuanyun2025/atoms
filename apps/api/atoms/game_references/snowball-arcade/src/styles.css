@@ -1,0 +1,17 @@
+* { box-sizing: border-box; }
+body { margin: 0; background: #0d1d30; color: #e7f9f7; font: 15px system-ui,sans-serif; }
+main { width: min(100% - 28px,780px); margin: 20px auto; }
+header { display: flex; justify-content: space-between; align-items: end; flex-wrap: wrap; gap: 8px; }
+header p { margin: 0; color: #b7e9dd; font-size: 12px; }
+h1 { margin: 0; font-size: clamp(28px,6vw,48px); }
+.hud { display: flex; flex-wrap: wrap; gap: 10px 20px; margin: 12px 0 8px; color: #b7e9dd; }
+.hud b { color: #fff; }
+.field { position: relative; border: 2px solid #4b889e; }
+canvas { display: block; width: 100%; }
+.overlay { position: absolute; inset: 0; display: grid; align-content: center; justify-items: center; gap: 14px; background: #0d1d30ba; }
+.overlay strong { font-size: clamp(18px,4vw,32px); }
+button { border: 1px solid #c7efec; padding: 8px 15px; border-radius: 4px; color: #092634; background: #c0f5ec; font: inherit; cursor: pointer; touch-action: none; }
+button:focus-visible,canvas:focus-visible { outline: 3px solid #ffc779; outline-offset: -3px; }
+.guide { color: #c5e3e7; font-size: 13px; line-height: 1.6; }
+.controls { display: flex; gap: 6px; flex-wrap: wrap; }
+.controls button { min-width: 46px; min-height: 44px; }

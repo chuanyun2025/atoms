@@ -1,10 +1,10 @@
-import {lazy,Suspense,useEffect,useRef,useState,type FormEvent,type ReactNode} from "react";
+import {lazy,Suspense,useCallback,useEffect,useRef,useState,type FormEvent,type ReactNode} from "react";
 import {Link,NavLink,Route,Routes,useParams} from "react-router-dom";
 import Modal from "./Modal";
 import WalletButton,{useWallet} from "./Wallet";
 import {useQuery,useQueryClient} from "@tanstack/react-query";
 import {ArrowUp,Plus,Layers3,PanelLeftClose,PanelLeftOpen,Settings2,ChevronDown,Check,CheckCircle2,Code2,Eye,Download,History,Monitor,Smartphone,RotateCcw,X,Sparkles,LayoutGrid,ArrowLeft,LoaderCircle,AlertCircle,Braces,House,Menu,ChevronRight} from "lucide-react";
-import {api,active,ApiError,date,key,type Message,type Project,type ProjectKind,type Run,type Version} from "./api";
+import {api,active,ApiError,date,key,type Message,type Project,type ProjectKind,type Run,type RunSource,type Version} from "./api";
 import {creationKinds,modes} from "./creationModes";
 import {StudioLanding,StudioHeader,ProjectLibrary,useProjects,useCapabilities} from "./Studio";
 const LazyCode=lazy(()=>import("./Code"));
@@ -14,6 +14,8 @@ import PublishedPage,{PublishButton} from "./Publication";
 import BuildFailure from "./BuildFailure";
 import SlideTemplateDetail from "./SlideTemplateDetail";
 import {VideoStudio,VideoWorkspace} from "./VideoStudio";
+import RunProgress,{useRunProgress} from "./RunProgress";
+import "./run-workspace.css";
 
 function Brand({compact=false}:{compact?:boolean}){
   return <Link to="/" className={"brand "+(compact?"compact":"")} aria-label="Atoms Studio 首页"><span className="brand-mark"><Layers3 size={21} strokeWidth={2.2}/></span>{!compact&&<span>atoms<span className="brand-light"> studio</span></span>}</Link>
@@ -77,18 +79,32 @@ function Workspace(){
   const {pid=""}=useParams(),client=useQueryClient();
   const [menuOpen,setMenuOpen]=useState(false);
   const [collapsed,setCollapsed]=useState(true),[prompt,setPrompt]=useState(()=>sessionStorage.getItem("atoms:draft:"+pid)||""),[error,setError]=useState(()=>sessionStorage.getItem("atoms:startup-error:"+pid)||""),[sending,setSending]=useState(false);
-  const [tab,setTab]=useState("preview"),[selected,setSelected]=useState<string|null>(null),[phone,setPhone]=useState(false),[reload,setReload]=useState(0),[saved,setSaved]=useState("已保存"),[history,setHistory]=useState(false),[restore,setRestore]=useState<Version>(),[restoring,setRestoring]=useState(false),[mobileView,setMobileView]=useState("preview");
+  const [tab,setTab]=useState<"preview"|"code"|null>(null),[selected,setSelected]=useState<string|null>(null),[phone,setPhone]=useState(false),[reload,setReload]=useState(0),[saved,setSaved]=useState("已保存"),[history,setHistory]=useState(false),[restore,setRestore]=useState<Version>(),[restoring,setRestoring]=useState(false),[mobileView,setMobileView]=useState("preview");
   const bottom=useRef<HTMLDivElement>(null);
   const {data:project,error:projectError}=useQuery({queryKey:["project",pid],queryFn:()=>api<Project>("/projects/"+pid)});
   const {data:messages}=useQuery({queryKey:["messages",pid],queryFn:()=>api<{items:Message[]}>("/projects/"+pid+"/messages")});
   const {data:versions}=useQuery({queryKey:["versions",pid],queryFn:()=>api<{items:Version[]}>("/projects/"+pid+"/versions")});
   const {data:cap}=useCapabilities();
   const {data:wallet}=useWallet();
-  const {data:run}=useQuery({queryKey:["run",project?.active_run_id],queryFn:()=>api<Run>("/runs/"+project!.active_run_id),enabled:!!project?.active_run_id,refetchInterval:3000});
-  const vid=selected||project?.current_version_id;
-  const {data:version}=useQuery({queryKey:["version",pid,vid],queryFn:()=>api<Version>("/projects/"+pid+"/versions/"+vid),enabled:!!vid});
   const busy=!!project?.active_run_id;
+  const runId=project?.active_run_id??messages?.items.at(-1)?.run_id;
+  const {data:run}=useQuery({queryKey:["run",runId],queryFn:()=>api<Run>("/runs/"+runId),enabled:!!runId,refetchInterval:busy?3000:false});
+  const vid=selected||project?.current_version_id;
+  const {data:version,isPending:versionPending}=useQuery({queryKey:["version",pid,vid],queryFn:()=>api<Version>("/projects/"+pid+"/versions/"+vid),enabled:!!vid});
   const historical=!!vid&&vid!==project?.current_version_id;
+  const showRunSource=!historical&&!!run?.workspace?.source_revision&&(busy||!vid);
+  const {data:runSource}=useQuery({
+    queryKey:["run-source",runId,run?.workspace?.source_revision],
+    queryFn:()=>api<RunSource>("/runs/"+runId+"/source"),enabled:showRunSource,
+    placeholderData:previous=>previous,retry:false,
+  });
+  const source=showRunSource?runSource:undefined;
+  const draftPreview=!historical&&busy&&active(run)&&!!run?.workspace?.has_preview;
+  const files=source?.files??version?.artifact?.files;
+  const canPreview=draftPreview||!!version?.artifact;
+  const displayTab=files&&(tab==="code"||!canPreview)?"code":"preview";
+  const showingDraft=displayTab==="code"?!!source:draftPreview;
+  const switchTab=(next:"preview"|"code")=>{setTab(next);setMobileView("preview")};
   const versionsByRun=new Map(versions?.items.map(item=>[item.source_run_id,item]));
   const recoveredRuns=new Set<string>();
   for (const message of (messages?.items??[]).slice().reverse()) {
@@ -102,23 +118,26 @@ function Workspace(){
     setTab("preview");
     setMobileView("preview");
   }
-  async function refresh(){
+  const refresh=useCallback(async()=>{
     await Promise.all([client.invalidateQueries({queryKey:["project",pid]}),client.invalidateQueries({queryKey:["projects"]}),client.invalidateQueries({queryKey:["messages",pid]}),client.invalidateQueries({queryKey:["versions",pid]}),client.invalidateQueries({queryKey:["wallet"]}),client.invalidateQueries({queryKey:["credit-transactions"]})]);
-  }
+  },[client,pid]);
+  const progressUpdate=useCallback((kind:string)=>{
+    if(client.getQueryData<Project>(["project",pid])?.active_run_id!==runId)return;
+    if(["completed","failed","interrupted","source_ready","preview_ready"].includes(kind)){
+      void client.invalidateQueries({queryKey:["run",runId]});
+    }
+    if(["completed","failed","interrupted"].includes(kind))void refresh();
+  },[client,pid,refresh,runId]);
+  const progress=useRunProgress(runId,progressUpdate);
   useEffect(()=>{sessionStorage.removeItem("atoms:startup-error:"+pid)},[pid]);
   useEffect(()=>{sessionStorage.setItem("atoms:draft:"+pid,prompt)},[pid,prompt]);
-  useEffect(()=>{bottom.current?.scrollIntoView({behavior:"smooth"})},[messages,busy]);
   useEffect(()=>{
-    if(run&&!active(run))void refresh();
-  },[run?.status]);
+    const chat=bottom.current?.parentElement;
+    chat?.scrollTo({top:chat.scrollHeight});
+  },[messages,busy,progress.length]);
   useEffect(()=>{
-    const rid=project?.active_run_id;
-    if(!rid)return;
-    const source=new EventSource("/api/v1/runs/"+rid+"/events");
-    const finish=()=>{source.close();void refresh()};
-    for(const name of ["completed","failed","interrupted"])source.addEventListener(name,finish);
-    return()=>source.close();
-  },[project?.active_run_id,pid]);
+    if(busy&&run&&!active(run))void refresh();
+  },[busy,run?.status,refresh]);
   async function submit(e:FormEvent){
     e.preventDefault();
     await sendRun(prompt);
@@ -191,13 +210,44 @@ function Workspace(){
           </div>}
         </article>;
       })}
-      {busy&&<div className="run-card" role="status"><div className="run-title"><LoaderCircle size={15} className="spin"/>建设中</div><p>可以刷新或离开页面，任务会继续执行。</p></div>}
+      <RunProgress events={progress} stage={run?.stage} busy={busy}
+        onCode={source?()=>switchTab("code"):undefined}
+        onPreview={draftPreview?()=>switchTab("preview"):undefined}/>
       <div ref={bottom}/></div>
       <div className="chat-compose-area">{wallet&&wallet.available_units<100&&<div className="capability-warning">可用积分不足；已有预览、版本和导出仍可使用。</div>}{!cap?.model_configured&&<div className="capability-warning"><AlertCircle size={15}/><span>模型待配置，连接后即可生成应用。</span></div>}{cap?.read_only&&<div className="capability-warning">系统维护中，当前只读。</div>}{error&&<div className="inline-error" role="alert">{error}<button aria-label="关闭错误" onClick={()=>setError("")}><X size={13}/></button></div>}
-      <form className="chat-composer" onSubmit={submit}><label className="sr-only" htmlFor="chat-prompt">描述需求或修改</label><textarea id="chat-prompt" placeholder={project?.current_version_id?"描述下一步修改…":"详细描述你想创建的应用…"} maxLength={100000} value={prompt} onChange={e=>setPrompt(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&(e.ctrlKey||e.metaKey)){e.preventDefault();e.currentTarget.form?.requestSubmit()}}}/><div><span>{busy?"建设中":project?.current_version_id?"基于当前版本继续构建":"准备好，就开始吧"}<span className="prompt-length">{prompt.length}/100000</span></span><button aria-label="提交需求" disabled={!prompt.trim()||sending||busy||(wallet?.available_units??0)<100||!cap?.model_configured||!cap?.worker_available||cap?.read_only}>{sending?<LoaderCircle size={16} className="spin"/>:<ArrowUp size={18}/>}</button></div></form><p className="chat-footnote">Ctrl / ⌘ + Enter 发送 · AI 生成结果请实际验证</p></div></section>
-      <section className="build-panel"><div className="preview-toolbar"><div className="view-tabs"><button className={tab==="preview"?"selected":""} onClick={()=>setTab("preview")}><Eye size={15}/>预览</button><button className={tab==="code"?"selected":""} onClick={()=>setTab("code")}><Code2 size={15}/>代码</button></div><div className="preview-controls">{version&&<button className="version-chip" onClick={()=>setHistory(!history)}>v{version.number}<ChevronDown size={12}/></button>}<span className="toolbar-divider"/><button className={"icon-button "+(!phone?"selected":"")} title="桌面预览" aria-label="桌面预览" onClick={()=>setPhone(false)}><Monitor size={16}/></button><button className={"icon-button "+(phone?"selected":"")} title="手机预览" aria-label="手机预览" onClick={()=>setPhone(true)}><Smartphone size={16}/></button><span className="toolbar-divider"/><button className="icon-button" aria-label="重新加载预览" onClick={()=>setReload(n=>n+1)} disabled={!vid}><RotateCcw size={15}/></button></div></div>
+      <form className="chat-composer" onSubmit={submit}><label className="sr-only" htmlFor="chat-prompt">描述需求或修改</label><textarea id="chat-prompt" placeholder={project?.current_version_id?"描述下一步修改…":"详细描述你想创建的应用…"} maxLength={100000} value={prompt} onChange={e=>setPrompt(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&(e.ctrlKey||e.metaKey)){e.preventDefault();e.currentTarget.form?.requestSubmit()}}}/><div><span>{busy?"构建期间可以离开此页面":project?.current_version_id?"基于当前版本继续构建":"准备好，就开始吧"}<span className="prompt-length">{prompt.length}/100000</span></span><button aria-label="提交需求" disabled={!prompt.trim()||sending||busy||(wallet?.available_units??0)<100||!cap?.model_configured||!cap?.worker_available||cap?.read_only}>{sending?<LoaderCircle size={16} className="spin"/>:<ArrowUp size={18}/>}</button></div></form><p className="chat-footnote">Ctrl / ⌘ + Enter 发送 · AI 生成结果请实际验证</p></div></section>
+      <section className="build-panel"><div className="preview-toolbar">
+        <div className="view-tabs">
+          <button className={displayTab==="preview"?"selected":""} aria-pressed={displayTab==="preview"} disabled={!canPreview} onClick={()=>switchTab("preview")}><Eye size={15}/>预览</button>
+          <button className={displayTab==="code"?"selected":""} aria-pressed={displayTab==="code"} disabled={!files} onClick={()=>switchTab("code")}><Code2 size={15}/>代码</button>
+        </div>
+        <div className="preview-controls">
+          {showingDraft?<span className="draft-indicator">本次构建</span>:version&&<button className="version-chip" onClick={()=>setHistory(!history)}>v{version.number}<ChevronDown size={12}/></button>}
+          <span className="toolbar-divider"/>
+          <button className={"icon-button "+(!phone?"selected":"")} title="桌面预览" aria-label="桌面预览" disabled={!canPreview||displayTab==="code"} onClick={()=>setPhone(false)}><Monitor size={16}/></button>
+          <button className={"icon-button "+(phone?"selected":"")} title="手机预览" aria-label="手机预览" disabled={!canPreview||displayTab==="code"} onClick={()=>setPhone(true)}><Smartphone size={16}/></button>
+          <span className="toolbar-divider"/>
+          <button className="icon-button" aria-label="重新加载预览" disabled={!canPreview||displayTab==="code"} onClick={()=>setReload(n=>n+1)}><RotateCcw size={15}/></button>
+        </div>
+      </div>
       {historical&&<div className="history-banner"><History size={14}/><span>正在查看历史 v{version?.number}，业务数据只读</span><button onClick={()=>setSelected(null)}>回到当前</button><button disabled={busy||cap?.read_only} onClick={()=>version&&setRestore(version)}>恢复此版本</button></div>}
-      <div className="build-content">{vid&&version?.artifact?(tab==="code"?<Code files={version.artifact.files}/>:<Preview pid={pid} vid={vid} reload={reload} phone={phone} onSaved={setSaved}/>):<div className="build-empty"><div className="preview-illustration"><div className="illustration-browser"><div className="illustration-top"><i/><i/><i/><span/></div><div className="illustration-content"><div className="illustration-icon"><Layers3 size={29} strokeWidth={1.3}/></div><b/><span/><span/><section><i/><i/><i/></section></div></div><span className="floating-spark">✦</span><span className="floating-code"><Code2 size={18}/></span></div><h2>{busy?"你的应用，正在成形":"这里将是你的应用"}</h2><p>{busy?"建设完成后，可以在这里体验。":"在左侧描述需求，第一版完成后即可体验和继续修改。"}</p><div className="empty-capabilities"><span><Eye size={14}/>实时交互</span><span><Code2 size={14}/>完整源码</span><span><History size={14}/>版本记录</span></div></div>}</div><div className="preview-statusbar"><span><span className={"status-dot "+(saved==="未保存"?"red":"")}/>{vid?(historical?"历史预览 · 只读":saved):"等待首次生成"}</span><span>{version?"v"+version.number+" · ":""}{version?.artifact?.schema_version==="2"?"React / TypeScript":"HTML / CSS / JavaScript"}</span></div>
+      <div className="build-content">
+        {displayTab==="code"&&files?<Code files={files}/>
+          :draftPreview&&runId?<Preview key={runId} pid={pid} runId={runId} reload={reload} phone={phone} onSaved={setSaved}/>
+          :vid&&version?.artifact?<Preview key={vid} pid={pid} vid={vid} reload={reload} phone={phone} onSaved={setSaved}/>
+          :<div className="workspace-empty">
+            {busy||vid&&versionPending?<LoaderCircle className="spin" size={22}/>:<Code2 size={23}/>}
+            <h2>{vid&&versionPending?"正在载入版本":busy?"正在等待源码":run&&!active(run)?"暂无可用预览":"等待首次生成"}</h2>
+            <p>{vid&&versionPending?null:busy?"源码就绪后会先显示代码，应用通过运行检查后可预览。":run&&!active(run)?"可在对话中查看构建结果。":"提交需求后，代码和预览会显示在这里。"}</p>
+            {busy&&<button className="empty-open-chat" type="button" onClick={()=>setMobileView("chat")}>查看构建进度</button>}
+          </div>}
+      </div>
+      <div className="preview-statusbar">
+        <span><span className={"status-dot "+(saved==="未保存"&&!showingDraft?"red":"")}/>
+          {showingDraft?(displayTab==="code"?(busy?"构建源码 · 只读":"未发布源码 · 只读"):"临时预览 · 操作不保存")
+            :historical?"历史版本 · 只读":displayTab==="code"?"版本源码 · 只读":canPreview?saved:busy?"正在构建":"暂无预览"}</span>
+        {(source||version?.artifact)&&<span>{!showingDraft&&version?"v"+version.number+" · ":""}{(source?.schema_version??version?.artifact?.schema_version)==="2"?"React / TypeScript":"HTML / CSS / JavaScript"}</span>}
+      </div>
       {history&&<aside className="history-panel"><div><h3>版本记录</h3><button className="icon-button" aria-label="关闭版本记录" onClick={()=>setHistory(false)}><X size={17}/></button></div><p>每次通过校验的构建都会保存。</p>{versions?.items.length===0&&<div className="history-empty">还没有可用版本</div>}{versions?.items.map(v=><button key={v.id} className={"history-item "+(v.id===vid?"selected":"")} onClick={()=>showVersion(v.id)}><span><strong>版本 {v.number}</strong>{v.id===project?.current_version_id?<small>当前版本</small>:<ChevronRight size={14}/>}</span><p>{v.summary}</p><time>{date(v.created_at)}</time></button>)}</aside>}
       </section>
     </div>

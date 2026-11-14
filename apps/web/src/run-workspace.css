@@ -1,0 +1,38 @@
+.run-progress {
+  margin: 0 0 20px;
+  padding: 13px 15px;
+  border: 1px solid #dfe8e1;
+  border-radius: 9px;
+  background: #f8fbf9;
+  color: #445b4d;
+  overflow-wrap: anywhere;
+}
+.run-progress-current { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 650; }
+.run-progress-current svg { color: #47775d; flex: none; }
+.run-plan { margin-top: 11px; font-size: 12px; line-height: 1.65; }
+.run-plan p { margin: 0; }
+.run-plan ul { margin: 6px 0 0; padding-left: 18px; }
+.run-progress-details { font-size: 11px; }
+.run-progress-current ~ .run-progress-details { margin-top: 11px; padding-top: 8px; border-top: 1px solid #e3eae4; }
+.run-progress-details summary { display: flex; justify-content: space-between; align-items: center; gap: 8px; color: #536a5b; font-weight: 600; list-style: none; cursor: pointer; }
+.run-progress-details summary::-webkit-details-marker { display: none; }
+.run-progress-details[open] summary svg { transform: rotate(180deg); }
+.run-progress-details ol { list-style: none; margin: 9px 0 0; padding: 0; }
+.run-progress-details ol > li { position: relative; display: grid; grid-template-columns: 15px minmax(0, 1fr); gap: 8px; min-height: 25px; line-height: 17px; }
+.run-progress-details ol > li:not(:last-child)::before { content: ""; position: absolute; top: 14px; bottom: 0; left: 7px; border-left: 1px solid #d8e5dc; }
+.run-step-icon { width: 15px; height: 15px; display: grid; place-items: center; color: #47775d; }
+.run-step-icon span { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.run-progress-details li p { margin: 2px 0 7px; color: #536a5b; }
+.run-progress-details li button { margin-left: 7px; color: #3459a0; text-decoration: underline; text-underline-offset: 2px; }
+.run-progress-details summary:focus-visible, .run-progress-details button:focus-visible, .empty-open-chat:focus-visible { outline: 2px solid #5374d8; outline-offset: 3px; }
+.workspace-empty { display: grid; justify-items: center; align-content: center; gap: 10px; width: 100%; padding: 24px; text-align: center; color: #4d5e85; }
+.workspace-empty h2 { margin: 0; font-size: 16px; font-weight: 600; }
+.workspace-empty p { margin: 0; font-size: 12px; line-height: 1.6; }
+.draft-indicator { padding: 4px 7px; border-radius: 5px; color: #375594; background: #e8eefb; font-size: 10px; white-space: nowrap; }
+.empty-open-chat { display: none; }
+@media (max-width: 700px) {
+  .empty-open-chat { display: block; color: #3459a0; font-size: 12px; text-decoration: underline; text-underline-offset: 2px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .run-progress .spin, .workspace-empty .spin { animation: none; }
+}

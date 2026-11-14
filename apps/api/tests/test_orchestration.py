@@ -5,8 +5,9 @@ import httpx
 import pytest
 
 from atoms.config import settings
+from atoms.game_benchmarks import match_genre
 from atoms.game_profiles import game_profile
-from atoms.orchestration import PLAN_FILE, TaskPlan, TaskReview, enforce_plan, parse_decision, requests_fps, uses_threejs
+from atoms.orchestration import PLAN_FILE, TaskPlan, TaskReview, enforce_plan, parse_decision, requests_fps
 from atoms import worker
 from atoms.worker import agent_decision as real_agent_decision
 from conftest import create_project, submit
@@ -32,13 +33,17 @@ def test_fps_expectations_survive_a_planner_downgrade():
     assert not requests_fps({**context,"request":"制作60FPS的竞速游戏"})
 
 
-def test_generic_racing_defaults_to_chase_and_explicit_top_down_is_preserved():
+def test_racing_defaults_to_2d_and_respects_explicit_3d():
     context={"project_kind":"game","request":"生成一个赛车游戏","base_artifact":None}
-    racing=enforce_plan(plan(),context)
-    assert racing.experience=="track_racing" and racing.rendering=="threejs"
+    proposed=plan().model_copy(update={"experience":"track_racing","rendering":"threejs"})
+    racing=enforce_plan(proposed,context)
+    assert racing.experience=="other_game" and racing.rendering=="canvas2d"
+    assert racing.game_genre=="racing"
     assert racing.requirements==plan().requirements
-    explicit=enforce_plan(racing,{**context,"request":"做一个2D俯视赛车游戏，不要道具"})
-    assert explicit.experience=="other_game" and explicit.rendering=="canvas2d"
+    explicit=enforce_plan(racing,{**context,"request":"做一个3D赛车游戏，不要道具"})
+    assert explicit.experience=="track_racing" and explicit.rendering=="threejs"
+    top_down=enforce_plan(explicit,{**context,"request":"做一个2D俯视赛车游戏"})
+    assert top_down.experience=="other_game" and top_down.rendering=="canvas2d"
 
 
 @pytest.mark.parametrize(("request_text", "rendering", "has_existing_scene", "expected"), [
@@ -46,18 +51,27 @@ def test_generic_racing_defaults_to_chase_and_explicit_top_down_is_preserved():
     ("制作一个俯视的 3D 塔防游戏", "threejs", False, True),
     ("制作一个二维消除游戏", "threejs", False, False),
     ("制作一个二维 FPS 游戏", "threejs", False, False),
+    ("做一个第一人称射击游戏", "dom", False, True),
+    ("Make a first-person shooter", "dom", False, True),
+    ("制作60FPS的竞速游戏", "threejs", False, False),
+    ("做一个赛车游戏，带 FPS 计数器", "threejs", False, False),
+    ("做一个射击游戏，不要做 FPS", "threejs", False, False),
+    ("做一个塔防游戏", "threejs", False, False),
+    ("做一个小游戏，不需要用3D", "threejs", False, False),
     ("做一个3D解谜游戏", "dom", False, True),
     ("制作俄罗斯方块", "threejs", False, False),
     ("制作一个3D游戏，不要2D", "dom", False, True),
     ("把 3D 改成 2D", "threejs", True, False),
     ("给现有游戏加音效", "dom", True, True),
     ("把现有游戏改成 2D 横版", "threejs", True, False),
+    ("改成不使用3D的游戏", "threejs", True, False),
 ])
 def test_threejs_skill_routing(request_text, rendering, has_existing_scene, expected):
     context = {"project_kind":"game", "request":request_text}
     if has_existing_scene:
         context["base_artifact"] = {"files":{"src/game/scene.ts":'import * as THREE from "three";'}}
-    assert uses_threejs(plan().model_copy(update={"rendering":rendering}), context) is expected
+    resolved = enforce_plan(plan().model_copy(update={"rendering":rendering}), context)
+    assert (resolved.rendering == "threejs") is expected
 
 
 def test_structured_planning_fields_preserve_their_content():
@@ -81,15 +95,67 @@ def test_optional_planner_ideas_do_not_become_blocking_fps_requirements():
     assert review.accepted and not review.findings
 
 
+def test_default_2d_game_repairs_a_candidate_using_threejs(client, monkeypatch):
+    from atoms import model_fixture
+    from test_retry import validator
+    from test_workflow import VALIDATION
+
+    project = client.post("/api/v1/projects", json={
+        "client_key": "racing-test-key", "title": "赛车", "kind": "game",
+    }).json()
+    assert submit(client, project["id"], "生成一个赛车游戏").status_code == 202
+    run = worker.claim("test-leader")
+
+    async def search(genre):
+        return {"status": "static", "genre": genre, "games": []}
+
+    async def generate(run, context, repair, **kwargs):
+        assert context["task_plan"]["rendering"] in {"dom", "canvas2d"}
+        candidate = model_fixture.test_artifact(context, repair)
+        if repair:
+            assert "本次游戏需要 2D 渲染" in repair["diagnostics"]
+            return candidate
+        artifact = json.loads(candidate)
+        artifact["files"]["src/App.tsx"] = 'import * as THREE from "three";\n' + artifact["files"]["src/App.tsx"]
+        return json.dumps(artifact)
+
+    monkeypatch.setattr(worker, "find_game_references", search)
+    monkeypatch.setattr(worker, "paid_generate", generate)
+    validator(monkeypatch, [VALIDATION])
+    asyncio.run(worker.execute_run(run))
+    assert client.get("/api/v1/runs/" + run["id"]).json()["status"] == "succeeded"
+
+
 def test_game_profiles_cover_genre_families_and_fallback():
-    assert game_profile("platformer")==game_profile("fps")
-    assert game_profile("racing")==game_profile("sports")
+    assert game_profile("arcade_platformer")!=game_profile("platformer")
+    assert game_profile("racing")!=game_profile("sports")
+    assert game_profile("match3")!=game_profile("puzzle")
+    assert game_profile("tower_defense")!=game_profile("strategy")
     assert game_profile("puzzle")==game_profile("rhythm")
     assert game_profile("card")==game_profile("simulation")
     assert game_profile("other")["name"]=="通用游戏"
 
 
-def test_platformer_research_precedes_planning_and_is_used_for_generation(client, monkeypatch):
+@pytest.mark.parametrize(("request_text","genre"),[
+    ("生成一个雪人兄弟游戏","arcade_platformer"),
+    ("做一个 Snow Bros. 风格的横版平台跳跃游戏","arcade_platformer"),
+    ("做一个像马里奥的横版跳跃游戏","platformer"),
+    ("做一个用连锁消除过关的三消解谜游戏","match3"),
+    ("做个像植物大战僵尸的策略游戏","tower_defense"),
+    ("做一个结合三消和塔防的游戏",None),
+])
+def test_specific_mechanics_route_before_broad_genre(request_text,genre):
+    assert match_genre(request_text)==genre
+
+
+@pytest.mark.parametrize(("request_text","genre","reference"),[
+    ("做一个类似马里奥的平台跳跃游戏","platformer",None),
+    ("生成一个雪人兄弟游戏","arcade_platformer","snowball-arcade"),
+    ("做一个固定屏平台清场游戏","arcade_platformer",None),
+    ("做一个宝石三消游戏","match3","match-three"),
+    ("做一个花园塔防游戏","tower_defense","tower-defense"),
+])
+def test_game_research_and_template_reach_the_generation_pipeline(client, monkeypatch, request_text, genre, reference):
     from atoms import model_fixture
     from test_retry import validator
     from test_workflow import VALIDATION
@@ -97,32 +163,41 @@ def test_platformer_research_precedes_planning_and_is_used_for_generation(client
     project = client.post("/api/v1/projects", json={
         "client_key": "platformer-test-key", "title": "平台跳跃", "kind": "game",
     }).json()
-    assert submit(client, project["id"], "做一个类似马里奥的平台跳跃游戏").status_code == 202
+    assert submit(client, project["id"], request_text).status_code == 202
     run = worker.claim("test-leader")
     calls = []
-    research = {"status": "live", "genre": "platformer", "games": [{"title": "Example Platformer"}]}
+    research = {"status": "live", "genre": genre, "games": [{"title": "Example Platformer"}]}
 
-    async def search(genre):
-        assert genre == "platformer"
+    async def search(requested_genre):
+        assert requested_genre == genre
         calls.append("research")
         return research
 
     async def decision(run, role, context):
         if role=="reviewer":
-            assert context["task_plan"]["game_genre"] == "platformer"
+            assert context["task_plan"]["game_genre"] == genre
+            assert context["game_profile"] == game_profile(genre)
             return TaskReview(accepted=True,findings=[])
         assert role=="planner"
         assert calls == ["research"]
+        assert context["game_dimension"] == "2d"
         assert context["game_research"] == research
-        assert context["game_benchmarks"]["platformer"]["sources"]
+        assert context["game_benchmarks"][genre]["sources"]
+        assert context["game_profile"] == game_profile(genre)
         return plan()
 
     async def generate(run, context, repair, **kwargs):
-        assert context["task_plan"]["game_genre"] == "platformer"
+        assert context["task_plan"]["game_genre"] == genre
         assert context["task_plan"]["rendering"] == "canvas2d"
         assert "web-artifacts-builder" in kwargs["skill"].instructions
         assert context["game_research"] == research
+        assert context["game_profile"] == game_profile(genre)
         assert not context["fps_required"]
+        if reference:
+            assert context["game_reference"]["id"] == reference
+            assert context["game_reference"]["files"]
+        else:
+            assert "game_reference" not in context
         return model_fixture.test_artifact(context, repair)
 
     monkeypatch.setattr(worker, "agent_decision", decision)

@@ -20,6 +20,7 @@ from .orchestration import FPS_COVER_FILE, PLAN_FILE, TaskPlan, enforce_plan, ga
 from .skills import skill_for
 from .game_scenes import scene_direction
 from .game_benchmarks import BENCHMARKS, match_genre
+from .game_profiles import game_profile
 from .game_research import RESEARCH_FILE, find_game_references
 from .slide_templates import slide_template_reference
 from .slide_decks import render_slide_deck
@@ -52,6 +53,7 @@ def fail_locked(conn,run,status,code,message):
     execute(conn,"INSERT INTO messages(id,project_id,run_id,role,content,created_at) VALUES(:id,:pid,:rid,'assistant',:message,:now)",
             id=uid(),pid=run["project_id"],rid=run["id"],message=message[:1200],now=now)
     add_event(conn,run["id"],status,{"code":code,"message":message[:1200]})
+    execute(conn,"UPDATE run_workspace SET compiled_json=NULL,digest=NULL WHERE run_id=:id",id=run["id"])
 
 
 def recover_expired():
@@ -120,12 +122,12 @@ def claim(token):
         return one(conn,"SELECT * FROM runs WHERE id=:id",id=row["id"])
 
 
-def stage(rid,token,name,message):
+def stage(rid,token,name,message,**details):
     with transaction(True) as conn:
         run=one(conn,"SELECT * FROM runs WHERE id=:id",id=rid)
         guard(run,token)
         execute(conn,"UPDATE runs SET stage=:stage WHERE id=:id",stage=name,id=rid)
-        add_event(conn,rid,name,{"message":message})
+        add_event(conn,rid,name,{"message":message,**details})
 
 
 def read_context(run):
@@ -166,6 +168,30 @@ def keep_candidate(run,raw,diagnostics,attempt):
             id=run["id"],raw=raw,diagnostics=diagnostics[:2000],attempt=attempt,now=now)
 
 
+def publish_source(run, artifact):
+    files = artifact.get("files")
+    if not isinstance(files, dict) or not files or any(not isinstance(value, str) for value in files.values()):
+        return
+    source = compact({"schema_version":artifact.get("schema_version"),"files":files})
+    with transaction(True) as conn:
+        guard(one(conn,"SELECT * FROM runs WHERE id=:id",id=run["id"]),run["lease_token"])
+        changed = execute(conn,"""INSERT INTO run_workspace(run_id,source_json,source_revision) VALUES(:id,:source,1)
+            ON CONFLICT(run_id) DO UPDATE SET source_json=excluded.source_json,source_revision=run_workspace.source_revision+1
+            WHERE run_workspace.source_json!=excluded.source_json""",id=run["id"],source=source)
+        if changed.rowcount:
+            add_event(conn,run["id"],"source_ready",{"message":"源码已可查看"})
+
+
+def publish_preview(run, compiled):
+    with transaction(True) as conn:
+        guard(one(conn,"SELECT * FROM runs WHERE id=:id",id=run["id"]),run["lease_token"])
+        # Keep the first runnable preview stable while the worker reviews or refines the build.
+        changed = execute(conn,"""UPDATE run_workspace SET compiled_json=:compiled,digest=:digest
+            WHERE run_id=:id AND digest IS NULL""",id=run["id"],compiled=compact(compiled),digest=compiled["digest"])
+        if changed.rowcount:
+            add_event(conn,run["id"],"preview_ready",{"message":"临时预览已可体验"})
+
+
 def commit(run,artifact,validation):
     now=time.time()
     with transaction(True) as conn:
@@ -188,6 +214,7 @@ def commit(run,artifact,validation):
                 id=uid(),pid=run["project_id"],rid=run["id"],summary=artifact["summary"],now=now)
         add_event(conn,run["id"],"completed",{"version_id":vid,"version_number":number,"message":artifact["summary"]})
         execute(conn,"DELETE FROM run_candidates WHERE run_id=:id",id=run["id"])
+        execute(conn,"DELETE FROM run_workspace WHERE run_id=:id",id=run["id"])
 
 
 def fail(run,code,message,status="failed"):
@@ -255,7 +282,7 @@ def recent_game_scenes(run):
     return [json.loads(row["raw_json"])["files"] for row in rows]
 
 
-async def validate_candidate(run,raw,attempt,*,slide_template=None,react=False,site_files=None,website_starter=None,preview_kind="web",retain=True):
+async def validate_candidate(run,raw,attempt,*,slide_template=None,react=False,site_files=None,website_starter=None,preview_kind="web",required_game_dimension=None,retain=True,validator_slot=None):
     rid,token=run["id"],run["lease_token"]
     if len(raw.encode())>32*1024*1024:
         raise ValueError("代码超过传输资源保护")
@@ -283,16 +310,20 @@ async def validate_candidate(run,raw,attempt,*,slide_template=None,react=False,s
             sources="\n".join(source for path,source in files.items() if path.endswith((".ts",".tsx")) and isinstance(source,str))
             if FPS_COVER_FILE not in files and re.search(r"['\"][^'\"\n]*shot-cover(?:\.ts)?['\"]",sources):
                 files[FPS_COVER_FILE]=game_reference("first-person")["files"][FPS_COVER_FILE]
+        await asyncio.to_thread(publish_source,run,artifact)
         lightweight_3d=game and has_threejs(artifact)
-        await asyncio.to_thread(stage,rid,token,"browser_check","检查预览和主要操作")
+        if required_game_dimension=="2d" and lightweight_3d:
+            raise ValueError("本次游戏需要 2D 渲染。请用 DOM 或 Canvas 2D 实现并移除 Three.js 引用")
         timeout=65 if lightweight_3d else 23
-        async with httpx.AsyncClient(timeout=timeout,trust_env=False) as client:
-            response=await client.post(settings().validator_url+"/internal/validate",
-                headers={"Authorization":"Bearer "+settings().service_token},
-                json={"artifact":artifact,"app_origin":settings().app_origin,"request_id":rid,
-                      "lightweight_3d":lightweight_3d,"preview_kind":preview_kind})
-            response.raise_for_status()
-            validation=response.json()
+        async with validator_slot if validator_slot is not None else nullcontext():
+            await asyncio.to_thread(stage,rid,token,"browser_check","检查预览和主要操作")
+            async with httpx.AsyncClient(timeout=timeout,trust_env=False) as client:
+                response=await client.post(settings().validator_url+"/internal/validate",
+                    headers={"Authorization":"Bearer "+settings().service_token},
+                    json={"artifact":artifact,"app_origin":settings().app_origin,"request_id":rid,
+                          "lightweight_3d":lightweight_3d,"preview_kind":preview_kind})
+                response.raise_for_status()
+                validation=response.json()
         if not validation.get("ok"):
             diagnostic=validation.get("error","产物未通过检查")
             # During a rolling update an older validator still returns these service errors as 200.
@@ -303,6 +334,7 @@ async def validate_candidate(run,raw,attempt,*,slide_template=None,react=False,s
             raise ValueError(diagnostic)
         if validation.get("report",{}).get("acceptance")!="smoke" or not validation["report"].get("ready"):
             raise ModelError("VALIDATOR_UNAVAILABLE","启动检查未完成，已保留本次代码")
+        await asyncio.to_thread(publish_preview,run,validation["compiled"])
         if rendered_deck:
             validation["report"]["slide_renderer"]="template-deck-v1"
         if website_starter:
@@ -321,17 +353,16 @@ async def validate_candidate(run,raw,attempt,*,slide_template=None,react=False,s
         raise ModelError("VALIDATOR_UNAVAILABLE","独立校验服务暂不可用，请稍后继续；本次代码已保留") from None
 
 
-async def validate_with_retry(run,raw,attempt,*,validator_slot=None,**options):
-    async with validator_slot if validator_slot is not None else nullcontext():
-        for delay in VALIDATOR_RETRY_DELAYS:
-            try:
-                return await validate_candidate(run,raw,attempt,**options)
-            except ModelError as error:
-                if error.code!="VALIDATOR_UNAVAILABLE":
-                    raise
-                await asyncio.to_thread(stage,run["id"],run["lease_token"],"validating","等待校验服务恢复，随后复查当前版本")
-                await asyncio.sleep(delay)
-        return await validate_candidate(run,raw,attempt,**options)
+async def validate_with_retry(run,raw,attempt,**options):
+    for delay in VALIDATOR_RETRY_DELAYS:
+        try:
+            return await validate_candidate(run,raw,attempt,**options)
+        except ModelError as error:
+            if error.code!="VALIDATOR_UNAVAILABLE":
+                raise
+            await asyncio.to_thread(stage,run["id"],run["lease_token"],"validator_wait","等待校验服务恢复")
+            await asyncio.sleep(delay)
+    return await validate_candidate(run,raw,attempt,**options)
 
 
 async def deliver(run,artifact,validation):
@@ -349,6 +380,7 @@ async def review_game(run, context, artifact, smoke):
             review = await agent_decision(run,"reviewer",{
                 "request":context["request"],
                 "task_plan":context.get("task_plan"),
+                "game_profile":context.get("game_profile"),
                 "browser_evidence":smoke,
                 "artifact":{"files":files},
             })
@@ -412,7 +444,7 @@ async def execute_run(run, *, validator_slot=None):
         if starter:
             context["website_starter"]=starter.reference()
     website_starter=context.get("website_starter")
-    validation_options={"preview_kind":context["project_kind"],"validator_slot":validator_slot,
+    validation_options={"preview_kind":context["project_kind"],"validator_slot":validator_slot,"required_game_dimension":dimension,
                         "slide_template":slide_template,"react":react,"site_files":site_files,
                         "website_starter":website_starter}
     coordinated=react
@@ -421,11 +453,13 @@ async def execute_run(run, *, validator_slot=None):
     if context["project_kind"]=="game":
         await asyncio.to_thread(stage,rid,token,"researching","查找同类热门游戏及玩法资料")
         genre="fps" if fps_request else match_genre(context["request"])
-        if not genre and base:
+        if base:
             try:
-                genre=strict_json(base.get("files",{}).get(PLAN_FILE,"{}")).get("game_genre")
-            except (ValueError,AttributeError):
+                context["base_game_genre"]=TaskPlan.model_validate_json(base.get("files",{}).get(PLAN_FILE,"{}")).game_genre
+            except (ValueError,TypeError,AttributeError):
                 pass
+        genre=genre or context.get("base_game_genre")
+        context["game_profile"]=game_profile(genre)
         research=await find_game_references(genre or "other")
         context["game_research"]=research
         if coordinated:
@@ -451,6 +485,7 @@ async def execute_run(run, *, validator_slot=None):
         if game:
             skill=skill_for("game", threejs=plan.rendering=="threejs")
             context["fps_required"]=plan.experience=="first_person_3d"
+            context["game_profile"]=game_profile(plan.game_genre)
         site_files[PLAN_FILE]=json.dumps(plan.model_dump(),ensure_ascii=False,indent=2)
 
     repair=None
@@ -485,14 +520,23 @@ async def execute_run(run, *, validator_slot=None):
             planning_context["game_dimension"]=dimension
             planning_context["game_benchmarks"]={genre:BENCHMARKS[genre]} if genre in BENCHMARKS else {}
         apply_plan(await agent_decision(run,"planner",planning_context))
+        await asyncio.to_thread(stage,rid,token,"plan_ready","构建计划已整理",
+                                summary=plan.visual_direction[:220],items=[item[:180] for item in plan.requirements[:3]])
     if plan and context["project_kind"]=="game" and plan.game_genre not in (None,"other",context["game_research"]["genre"]):
         research=await find_game_references(plan.game_genre)
         context["game_research"]=research
         site_files[RESEARCH_FILE]=json.dumps(research,ensure_ascii=False,indent=2)
+    if plan and game and dimension=="2d" and base is None and not (resume and resume.get("candidate")):
+        reference={"match3":"match-three","tower_defense":"tower-defense"}.get(plan.game_genre)
+        if plan.game_genre=="arcade_platformer" and re.search(r"雪人兄弟|\bsnow\s*bros\b",context["request"],re.I):
+            reference="snowball-arcade"
+        if reference:
+            context["game_reference"]=game_reference(reference)
     failed_candidates={}
     for repair_round in range(1 if repair else 0, MAX_REPAIR_ROUNDS + 1):
         attempt=repair_round+1
-        await asyncio.to_thread(stage,rid,token,"repairing" if repair else "generating","建设中")
+        await asyncio.to_thread(stage,rid,token,"repairing" if repair else "generating",
+                                "修正上一版发现的问题" if repair else "正在生成代码")
         if repair:
             repair={**repair,"round":repair_round}
         try:
@@ -554,6 +598,7 @@ async def execute_run(run, *, validator_slot=None):
             break
         remaining = run["started_at"] + settings().run_timeout_seconds - time.time() - 5
         if game and repair_round < MAX_REPAIR_ROUNDS and remaining > GAME_REVIEW_TIMEOUT:
+            await asyncio.to_thread(stage,rid,token,"reviewing","复核玩法和交互")
             report["source_review"] = await review_game(run,context,artifact,report.get("smoke",{}))
         feedback = quality_feedback(report)
         remaining = run["started_at"] + settings().run_timeout_seconds - time.time() - 5

@@ -37,6 +37,45 @@ def validator(monkeypatch,results):
     monkeypatch.setattr(httpx,"AsyncClient",lambda **kwargs:original(transport=httpx.MockTransport(handle)))
 
 
+def test_run_workspace_source_and_sandbox_follow_build_lifecycle(client,monkeypatch):
+    from fastapi.testclient import TestClient
+
+    project=create_project(client)
+    rid=submit(client,project["id"]).json()["id"]
+    run=claim("test-leader")
+    path="/api/v1/runs/"+rid
+    assert client.get(path+"/source").status_code==404
+    assert client.post(path+"/preview-ticket",json={}).status_code==404
+    original=httpx.AsyncClient
+
+    def handle(request):
+        assert request.url.path=="/internal/validate"
+        assert client.get(path+"/source").json()["files"]==ARTIFACT["files"]
+        assert client.get(path).json()["workspace"]=={"source_revision":1,"has_preview":False}
+        assert client.post(path+"/preview-ticket",json={}).status_code==404
+        return httpx.Response(200,json=VALIDATION)
+
+    monkeypatch.setattr(httpx,"AsyncClient",lambda **kwargs:original(transport=httpx.MockTransport(handle)))
+    artifact,validation=asyncio.run(worker.validate_candidate(run,compact(ARTIFACT),1))
+    assert client.get(path).json()["workspace"]=={"source_revision":1,"has_preview":True}
+    ticket=client.post(path+"/preview-ticket",json={}).json()
+    assert client.get(ticket["url"]).status_code==403
+    iframe={"Sec-Fetch-Dest":"iframe","Sec-Fetch-Site":"same-origin"}
+    preview=client.get(ticket["url"],headers=iframe)
+    assert preview.status_code==200
+    assert "sandbox allow-scripts" in preview.headers["Content-Security-Policy"]
+    with TestClient(client.app,base_url="http://localhost:8080") as other:
+        auth=other.post("/api/v1/session",json={},headers={"Origin":"http://localhost:8080","X-App-Request":"atoms"}).json()
+        assert other.get(path+"/source").status_code==404
+        assert other.post(path+"/preview-ticket",json={},headers={
+            "Origin":"http://localhost:8080","X-App-Request":"atoms","X-CSRF-Token":auth["csrf_token"],
+        }).status_code==404
+    worker.commit(run,artifact,validation)
+    assert client.get(path).json()["workspace"] is None
+    assert client.get(path+"/source").json()["files"]==ARTIFACT["files"]
+    assert client.get(ticket["url"],headers=iframe).status_code==200
+
+
 def test_retained_candidate_can_deliver_without_model_or_credits(client,monkeypatch):
     p=create_project(client)
     source=failed_candidate(client,p,compact(ARTIFACT))

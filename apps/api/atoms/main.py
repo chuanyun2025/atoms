@@ -192,7 +192,41 @@ def owned_run(conn,rid,owner):
 @app.get("/api/v1/runs/{rid}")
 def run_get(rid:str,user=Depends(visitor)):
     with transaction() as conn:
-        return service.public_run(owned_run(conn,rid,user["id"]))
+        run=service.public_run(owned_run(conn,rid,user["id"]))
+        workspace=one(conn,"SELECT source_revision,digest IS NOT NULL AS has_preview FROM run_workspace WHERE run_id=:id",id=rid)
+        if workspace:
+            workspace["has_preview"]=bool(workspace["has_preview"])
+        return {**run,"workspace":workspace}
+
+
+@app.get("/api/v1/runs/{rid}/source")
+def run_source(rid:str,user=Depends(visitor)):
+    with transaction() as conn:
+        run=owned_run(conn,rid,user["id"])
+        row=one(conn,"SELECT source_json FROM run_workspace WHERE run_id=:id",id=rid)
+        if not row and run["result_version_id"]:
+            version=service.owned_version(conn,run["project_id"],run["result_version_id"])
+            artifact=json.loads(version["raw_json"])
+            if artifact.get("files"):
+                return {"schema_version":artifact["schema_version"],"files":artifact["files"]}
+        if not row:
+            service.error(404,"source_unavailable","源码暂未就绪")
+    return json.loads(row["source_json"])
+
+
+@app.post("/api/v1/runs/{rid}/preview-ticket")
+def run_preview_ticket(rid:str,user=Depends(visitor)):
+    with transaction() as conn:
+        run=owned_run(conn,rid,user["id"])
+        if run["result_version_id"]:
+            row=one(conn,"""SELECT a.digest FROM versions v JOIN artifacts a ON a.id=v.artifact_id
+                WHERE v.id=:id AND json_extract(a.raw_json,'$.schema_version')!='3'""",id=run["result_version_id"])
+        else:
+            row=one(conn,"SELECT digest FROM run_workspace WHERE run_id=:id AND digest IS NOT NULL",id=rid)
+        if run["status"] not in {"running","succeeded"} or not row:
+            service.error(404,"preview_unavailable","临时预览已结束或尚未就绪")
+    payload={"run_id":rid,"digest":row["digest"],"instance_id":uid(),"channel_nonce":uid()+uid(),"exp":time.time()+120,"read_only":False}
+    return {**payload,"url":"/sandbox/runs/"+rid+"?ticket="+ticket_encode(payload)}
 
 
 def read_events(rid,owner,after):
@@ -293,6 +327,23 @@ def sandbox(vid:str,request:Request,ticket:str=""):
         row=one(conn,"SELECT a.* FROM artifacts a JOIN versions v ON a.id=v.artifact_id WHERE v.id=:id",id=vid)
     if not row or row["digest"]!=payload["digest"]:
         service.error(403,"invalid_preview","预览内容校验失败")
+    return HTMLResponse(render_document(json.loads(row["compiled_json"]),payload),headers={"Content-Security-Policy":csp()})
+
+
+@app.get("/sandbox/runs/{rid}",response_class=HTMLResponse)
+def run_sandbox(rid:str,request:Request,ticket:str=""):
+    if request.headers.get("sec-fetch-dest")!="iframe" or request.headers.get("sec-fetch-site")!="same-origin":
+        service.error(403,"iframe_only","请在工作台内打开预览")
+    payload=ticket_decode(ticket)
+    if payload.get("run_id")!=rid:
+        service.error(403,"invalid_preview","预览凭证不匹配")
+    with transaction() as conn:
+        row=one(conn,"""SELECT w.compiled_json,w.digest FROM run_workspace w JOIN runs r ON r.id=w.run_id
+            WHERE w.run_id=:id AND r.status='running' AND w.compiled_json IS NOT NULL
+            UNION ALL SELECT a.compiled_json,a.digest FROM runs r JOIN versions v ON v.id=r.result_version_id
+            JOIN artifacts a ON a.id=v.artifact_id WHERE r.id=:id AND r.status='succeeded'""",id=rid)
+        if not row or row["digest"]!=payload["digest"]:
+            service.error(404,"preview_unavailable","临时预览已结束或尚未就绪")
     return HTMLResponse(render_document(json.loads(row["compiled_json"]),payload),headers={"Content-Security-Policy":csp()})
 
 

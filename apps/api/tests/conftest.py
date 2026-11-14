@@ -27,7 +27,7 @@ def clean(monkeypatch):
         return (TaskPlan if role=="planner" else TaskReview).model_validate(strict_json(test_decision(role,context)))
     monkeypatch.setattr(worker,"agent_decision",decision)
     with transaction(True) as conn:
-        for name in ["video_jobs","credit_ledger","media_calls","media_assets","run_candidates","model_calls","credit_wallets","system_settings","quota_windows","app_states","project_actions","request_keys","run_events","publications","versions","artifacts","messages","runs","projects","visitors"]:
+        for name in ["video_jobs","credit_ledger","media_calls","media_assets","run_workspace","run_candidates","model_calls","credit_wallets","system_settings","quota_windows","app_states","project_actions","request_keys","run_events","publications","versions","artifacts","messages","runs","projects","visitors"]:
             execute(conn,"DELETE FROM "+name)
         execute(conn,"UPDATE worker_status SET lease_token=NULL,lease_until=0,heartbeat_at=0")
     acquire_leader("test-leader")

@@ -1,10 +1,38 @@
-"""Short generation and review guidance for related game genres."""
+"""Generation and review guidance for individual games and genre families."""
+
+_SPECIFIC = {
+    "arcade_platformer": {
+        "name": "固定屏平台街机",
+        "generation": "让走位、跳台与主动作共同决定清场路线。用不同平台布局、敌人行为或入场位置形成关卡节奏。雪人兄弟风格先命中积累冻结、再推雪球沿平台滚动撞敌；泡泡龙风格则保留捕获后戳破的规则。",
+        "review": "从每关出生点检查首跳和清场路径，核对玩家能否到达所有必打敌人的交互范围。验证捕获、释放、连锁命中，以及最后一个敌人被击败后进入下一关。",
+    },
+    "platformer": {
+        "name": "横版平台闯关",
+        "generation": "用移动、跳跃、落点和路线选择组织关卡。先教会一个动作，再改变落点间距、高差或机关时机，最后让玩家组合使用已学动作。关卡从可辨识的地标进到下一段。",
+        "review": "核对首个必经平台和后续必经跳跃在实际物理与碰撞规则下可稳定落地，关键道具、检查点和终点有可达路线。",
+    },
+    "match3": {
+        "name": "三消",
+        "generation": "设计可读的交换、消除、落子和连锁反馈。用不同目标格、障碍位置或有限步数改变优先顺序。提供至少一条可走的初始路径，并处理无可用交换。",
+        "review": "验证非法交换回退、合法匹配触发掉落补位、连锁逐轮结算，以及关卡目标与步数实际决定结局。",
+    },
+    "tower_defense": {
+        "name": "塔防",
+        "generation": "围绕路线、建造位置与资源做选择。用射程、攻速、范围或减速形成不同塔的用途，用敌人组合改变下一波的布防决策。植物大战僵尸风格保留多条独立横向战线和格子布防，经典塔防按需求使用弯曲路线。",
+        "review": "验证可建区域与费用、塔实际按规则索敌、漏怪会扣减基地状态、波次会结束且胜负可达。",
+    },
+    "racing": {
+        "name": "竞速",
+        "generation": "围绕刹车、过弯与出弯提速设计赛道。用直道、急弯和可读地标改变驾驶节奏，计时赛与对手赛按实际需求选择。",
+        "review": "验证加速、刹车和转向能配合，检查点按顺序推进，偏离赛道有后果且能回到赛道。",
+    },
+}
 
 _PROFILES = (
-    ("动作与闯关", {"fps", "platformer", "fighting", "survival", "roguelike"},
+    ("动作与闯关", {"fps", "fighting", "survival", "roguelike"},
      "围绕清晰的操控、反馈和挑战设计完整一局。视角、地图、资源、敌人与胜负机制按本次需求选择。",
      "用实际输入核对主动作、反馈和进程。按已实现的机制检查碰撞与目标，接受同等可用的输入和关卡设计。"),
-    ("竞速与体育", {"racing", "sports"},
+    ("体育比赛", {"sports"},
      "突出操控响应、可读的场地和比赛目标。按子类型选择视角、计时、得分或赛程，场地有自己的路线和地标。",
      "验证方向或动作符合直觉、比赛状态能推进并有明确结果。按所选赛制验收，奖励、障碍、圈数和对手都是设计选项。"),
     ("解谜与节奏", {"puzzle", "falling_blocks", "rhythm"},
@@ -17,6 +45,8 @@ _PROFILES = (
 
 
 def game_profile(genre: str | None) -> dict:
+    if genre in _SPECIFIC:
+        return _SPECIFIC[genre]
     for name,genres,generation,review in _PROFILES:
         if genre in genres:
             return {"name":name,"generation":generation,"review":review}

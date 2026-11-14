@@ -18,6 +18,7 @@ _TAG = {
     "puzzle": 1664, "strategy": 9, "survival": 1662, "fighting": 1743,
     "role_playing": 122, "sports": 701, "simulation": 599, "roguelike":1716,
     "rhythm":1752, "card":1666, "sandbox":3810, "other": 19,
+    "arcade_platformer": 1625, "match3": 1665, "tower_defense": 1645,
 }
 _GENRE_ID = {"racing": "9", "sports": "18", "strategy": "2", "role_playing": "3"}
 _cache: dict[str, tuple[float, dict]] = {}

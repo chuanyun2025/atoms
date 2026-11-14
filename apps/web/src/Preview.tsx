@@ -5,9 +5,10 @@ type Ticket={url:string;instance_id:string;channel_nonce:string;read_only:boolea
 type State={revision:number;values:Record<string,unknown>};
 type Message={protocol_version:number;instance_id:string;message_id:string;type:string;payload:Record<string,unknown>};
 type PreviewProps={reload:number;phone:boolean;onSaved:(s:string)=>void}&(
-  {pid:string;vid:string;exampleId?:never;publication?:never}
-  |{exampleId:string;pid?:never;vid?:never;publication?:never}
-  |{publication:{slug:string;ticket:Ticket};pid?:never;vid?:never;exampleId?:never}
+  {pid:string;vid:string;exampleId?:never;runId?:never;publication?:never}
+  |{exampleId:string;pid?:never;vid?:never;runId?:never;publication?:never}
+  |{runId:string;pid:string;vid?:never;exampleId?:never;publication?:never}
+  |{publication:{slug:string;ticket:Ticket};pid?:never;vid?:never;exampleId?:never;runId?:never}
 );
 // Example progress stays in this browser tab and never touches the author's project.
 const exampleStates=new Map<string,State>();
@@ -18,7 +19,7 @@ function publicationValues(slug:string):State{
   }catch{}
   return {revision:0,values:{}};
 }
-export default function Preview({pid,vid,exampleId,publication,reload,phone,onSaved}:PreviewProps){
+export default function Preview({pid,vid,exampleId,runId,publication,reload,phone,onSaved}:PreviewProps){
   const [ticket,setTicket]=useState<Ticket>(),[error,setError]=useState(""),[ready,setReady]=useState(false);
   const snapshot=useRef<State|undefined>(undefined),frame=useRef<HTMLIFrameElement>(null),port=useRef<MessagePort|undefined>(undefined),disposed=useRef(false),timer=useRef<ReturnType<typeof setTimeout>|undefined>(undefined);
   const initialized=useRef<string|undefined>(undefined);
@@ -31,13 +32,13 @@ export default function Preview({pid,vid,exampleId,publication,reload,phone,onSa
       : api<State>("/projects/"+pid+"/app-state");
     const previewTicket=publication?Promise.resolve(publication.ticket):exampleId
       ? api<Ticket>("/examples/"+exampleId+"/preview-ticket")
-      : api<Ticket>("/projects/"+pid+"/versions/"+vid+"/preview-ticket","POST",{});
+      : api<Ticket>(runId?"/runs/"+runId+"/preview-ticket":"/projects/"+pid+"/versions/"+vid+"/preview-ticket","POST",{});
     const load=Promise.all([previewTicket,state]);
     load
       .then(([next,state])=>{if(!cancelled){snapshot.current=state;setTicket(next)}}).catch(e=>{if(!cancelled)setError(e.message)});
     timer.current=setTimeout(()=>{if(!cancelled)setError(previous=>previous||"预览加载超时，请重新加载");},10000);
     return ()=>{cancelled=true;disposed.current=true;clearTimeout(timer.current);port.current?.close();port.current=undefined};
-  },[pid,vid,exampleId,publication,reload]);
+  },[pid,vid,exampleId,runId,publication,reload]);
   const init=()=>{
     if(!ticket||!frame.current?.contentWindow||!snapshot.current||initialized.current===ticket.instance_id) return;
     initialized.current=ticket.instance_id;
@@ -79,11 +80,11 @@ export default function Preview({pid,vid,exampleId,publication,reload,phone,onSa
             state.values=values;
             savedRef.current("已保存");respond(true);return;
           }
-          if(exampleId){
+          if(exampleId||runId){
             if(message.type==="storage.set") state.values[message.payload.key]=message.payload.value;
             else delete state.values[message.payload.key];
             state.revision++;
-            exampleStates.set(exampleId,state);
+            if(exampleId) exampleStates.set(exampleId,state);
             savedRef.current("已保存");respond(true);return;
           }
           const result=await api<State>("/projects/"+pid+"/app-state","PATCH",{

@@ -53,7 +53,8 @@ async def generate(prepared,output_tokens, *, run_id=None):
 
         context=json.loads(prepared.messages[1]["content"])
         repair=json.loads(prepared.messages[2]["content"].split("\n",1)[1]) if len(prepared.messages)>2 else None
-        await asyncio.sleep(8 if "[slow]" in context["request"] else .25)
+        slow_review=prepared.decision_role=="reviewer" and "[slow-review]" in context["request"]
+        await asyncio.sleep(8 if "[slow]" in context["request"] or slow_review else .25)
         if prepared.decision_role:
             from .model_fixture import test_decision
             raw=test_decision(prepared.decision_role,context)

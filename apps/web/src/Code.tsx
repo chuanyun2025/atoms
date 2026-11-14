@@ -11,8 +11,9 @@ export default function Code({files}:{files:Record<string,string>}){
   const [selection,setFile]=useState<string>(),[filter,setFilter]=useState("");
   const node=useRef<HTMLDivElement>(null);
   const paths=Object.keys(files);
-  const react=Object.hasOwn(files,"src/App.tsx");
-  const file=selection && Object.hasOwn(files,selection)?selection:react?"src/App.tsx":"index.html";
+  const classic=paths.every(path=>["index.html","styles.css","app.js"].includes(path));
+  const defaultFile=["src/App.tsx","index.html"].find(path=>Object.hasOwn(files,path))??paths[0]??"";
+  const file=selection && Object.hasOwn(files,selection)?selection:defaultFile;
   useEffect(()=>{
     if(!node.current) return;
     const view=new EditorView({parent:node.current,state:EditorState.create({doc:files[file]||"",extensions:[
@@ -24,11 +25,11 @@ export default function Code({files}:{files:Record<string,string>}){
     ]})});
     return ()=>view.destroy();
   },[file,files]);
-  if (!react) return <div className="code-panel"><div className="file-tabs">{["index.html","styles.css","app.js"].map(name=><button key={name} className={file===name?"selected":""} onClick={()=>setFile(name)}>{name}</button>)}<span>只读 · 完整源码</span></div><div ref={node} className="editor"/></div>;
+  if (classic) return <div className="code-panel"><div className="file-tabs">{["index.html","styles.css","app.js"].filter(name=>Object.hasOwn(files,name)).map(name=><button key={name} className={file===name?"selected":""} onClick={()=>setFile(name)}>{name}</button>)}<span>只读</span></div><div ref={node} className="editor"/></div>;
 
   const folders=new Map<string,string[]>();
   for (const path of paths.filter(path=>path.toLowerCase().includes(filter.trim().toLowerCase())).sort()) {
-    const directory=path.slice(0,path.lastIndexOf("/"));
+    const directory=path.includes("/")?path.slice(0,path.lastIndexOf("/")):"";
     const children=folders.get(directory)??[];
     children.push(path);
     folders.set(directory,children);
@@ -37,7 +38,7 @@ export default function Code({files}:{files:Record<string,string>}){
     <nav className="code-file-browser" aria-label="React 源码文件">
       <input aria-label="搜索源码文件" placeholder="搜索文件" value={filter} onChange={event=>setFilter(event.target.value)}/>
       {Array.from(folders,([directory,children])=><details open key={directory}>
-        <summary><Folder size={14}/> {directory}</summary>
+        <summary><Folder size={14}/> {directory||"项目文件"}</summary>
         {children.map(path=><button type="button" key={path} aria-current={file===path?"true":undefined} onClick={()=>setFile(path)}>
           <FileCode2 size={13}/>{path.split("/").at(-1)}
         </button>)}

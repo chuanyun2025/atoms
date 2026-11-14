@@ -3,7 +3,7 @@
 import re
 from typing import Literal
 
-GameGenre = Literal["fps", "platformer", "racing", "falling_blocks", "puzzle", "strategy", "survival",
+GameGenre = Literal["fps", "arcade_platformer", "platformer", "match3", "tower_defense", "racing", "falling_blocks", "puzzle", "strategy", "survival",
                     "fighting", "role_playing", "sports", "simulation", "roguelike", "rhythm", "card", "sandbox", "other"]
 
 BENCHMARKS = {
@@ -25,6 +25,21 @@ BENCHMARKS = {
             "用安全的第一处跳跃教授操作，再逐步增加平台间距、障碍或机关。坠落、检查点和终点有明确反馈。",
         ],
     },
+    "arcade_platformer": {
+        "sources": {"SNOW BROS.": "https://www.toaplangames.co.jp/en/license/license-20.html"},
+        "conventions": [
+            "固定屏内利用多层平台和敌人位置作决策，清场后切换到新的布局。",
+            "捕获、释放和碰撞有不同反馈。雪人兄弟风格可用冻结与雪球连锁呈现这套规则。",
+        ],
+    },
+    "match3": {
+        "sources": {"Phaser Games Examples": "https://phaser.io/oss/examples/v4.1.0/games"},
+        "conventions": ["相邻交换后检测匹配，依次结算消除、掉落与补位。关卡有可读目标和实际改变胜负的步数或计时。"],
+    },
+    "tower_defense": {
+        "sources": {"Phaser Games Showcase": "https://www.phaser.io/games"},
+        "conventions": ["敌人沿可读路线推进，波次之间提供调整防线的机会。花费、命中、漏怪和升级都应立即反映到游戏状态。"],
+    },
     "racing": {
         "sources": {
             "Gran Turismo 7": "https://blog.playstation.com/2022/02/02/gran-turismo-7-state-of-play-recap-and-your-first-few-hours-with-the-game/",
@@ -34,7 +49,7 @@ BENCHMARKS = {
         "conventions": [
             "加速、制动和转向是独立的连续输入。车辆速度、转弯反馈和赛道边界清楚可辨。",
             "检查点按顺序通过并更新圈数或剩余时间。离开赛道可恢复，终点给出明确成绩，画面能看清下一个弯道。",
-            "常规街机竞速采用低位跟车透视，赛道有连贯弯道、边界和路标。用不同车道安排可躲避的障碍、可收集的加速资源及驾驶反馈。",
+            "用适合当前视角的构图呈现连贯弯道、边界和路标。按玩法安排可躲避的障碍、可收集的加速资源及驾驶反馈。",
         ],
     },
     "falling_blocks": {
@@ -46,12 +61,18 @@ BENCHMARKS = {
     },
 }
 
+SPECIFIC_GENRE_PATTERNS = {
+    "arcade_platformer": r"雪人兄弟|泡泡龙(?:街机|闯关)|固定(?:屏|画面).{0,10}(?:平台|清怪|清场)|\bsnow\s*bros\b|\bbubble\s+bobble\b|\b(?:fixed|single)[ -]screen (?:arcade )?platformer\b",
+    "match3": r"三消|三连消除|连成三个|宝石迷阵|消消乐|\bmatch[ -]?(?:3|three)\b|\bbejeweled\b|\bcandy crush\b",
+    "tower_defense": r"塔防|植物大战僵尸|保卫萝卜|\btower[ -]defen[cs]e\b|\bplants vs\.? zombies\b",
+}
+
 GENRE_PATTERNS = {
-    "platformer": r"平台跳跃|横版跳跃|马里奥|\bplatformer\b|\bmario\b",
+    "platformer": r"平台跳跃|横版跳跃|马里奥|滚屏.{0,8}平台|\bplatformer\b|\bmario\b",
     "racing": r"赛车|竞速|卡丁车|跑跑卡丁|\bracing\b|\bkart\b",
     "falling_blocks": r"俄罗斯方块|落块|\btetris\b|\bfalling blocks\b",
     "puzzle": r"解谜|益智|拼图|\bpuzzle\b",
-    "strategy": r"策略|塔防|战棋|\bstrategy\b|tower defense",
+    "strategy": r"策略|战棋|\bstrategy\b",
     "survival": r"生存|\bsurvival\b",
     "fighting": r"格斗|拳皇|街霸|\bfighting\b",
     "role_playing": r"角色扮演|\brpg\b",
@@ -65,5 +86,8 @@ GENRE_PATTERNS = {
 
 
 def match_genre(request: str) -> GameGenre | None:
+    specific = [genre for genre, pattern in SPECIFIC_GENRE_PATTERNS.items() if re.search(pattern, request, re.I)]
+    if specific:
+        return specific[0] if len(specific) == 1 else None
     matches = [genre for genre, pattern in GENRE_PATTERNS.items() if re.search(pattern, request, re.I)]
     return matches[0] if len(matches) == 1 else None

@@ -52,8 +52,7 @@ test("连续三轮修复后在原任务交付，无需手动继续",async({page}
   const accepted=page.waitForResponse(r=>r.url().endsWith("/runs")&&r.request().method()==="POST"&&r.status()===202);
   await page.getByRole("button",{name:"开始创建",exact:true}).click();
   const run=await (await accepted).json();
-  await expect(page.getByRole("status").filter({hasText:"建设中"})).toBeVisible();
-  await expect(page.locator(".chat-scroll")).not.toContainText(/自动修复|第 \d+\/\d+ 轮/);
+  await expect(page.getByRole("region",{name:"构建进度"})).toContainText("修正上一版发现的问题");
   await expect(page.getByRole("button",{name:"查看版本 v1 预览"})).toBeVisible();
   const result=await (await page.request.get("/api/v1/runs/"+run.id)).json();
   expect(result).toMatchObject({status:"succeeded",model_calls:5,retry_of_run_id:null});
