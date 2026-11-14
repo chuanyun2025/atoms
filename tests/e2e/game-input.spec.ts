@@ -1,6 +1,7 @@
 import {test,expect} from "@playwright/test";
 import {checkGame} from "../../apps/validator/src/game-check";
 import {checkInputs} from "../../apps/validator/src/input-checks";
+import {readGamePlaytest,runGamePlaytest} from "../../apps/validator/src/game-delivery";
 import {smokeGame} from "../../apps/validator/src/game-smoke";
 
 test("通用可玩性检查点击当前目标，不读取固定目标或得分断言",async({page})=>{
@@ -177,4 +178,25 @@ test("FPS 试玩释放鼠标锁定后通过真实点击操作 HUD",async({page})
   await expect(frame.locator("[data-game-phase]")).toHaveAttribute("data-lock-seen","true");
   await expect(frame.locator("[data-game-phase]")).toHaveAttribute("data-fired","true");
   expect(await frame.evaluate(()=>Boolean(document.pointerLockElement))).toBe(false);
+});
+
+test("连续试玩要求实际状态变化，支持棋盘序列并识别自行变化的计时",async({page})=>{
+  const script={checks:[
+    {label:"移动后棋盘改变",key:"ArrowRight",signal:"board",change:"changed"},
+    {label:"继续移动后棋盘改变",key:"ArrowLeft",signal:"board",change:"changed"},
+  ]};
+  const checks=readGamePlaytest({"src/game/playtest.json":JSON.stringify(script)},true)!;
+  await page.setContent(`<main data-game-phase="playing" data-playtest-board="0,2,0,0" data-playtest-clock="0"><output>棋盘</output></main>
+    <script>
+      const board = document.querySelector("main");
+      window.addEventListener("keydown", event=>{
+        if (event.key==="ArrowRight") board.dataset.playtestBoard="0,0,0,2";
+        if (event.key==="ArrowLeft") board.dataset.playtestBoard="2,0,0,0";
+      });
+      setInterval(()=>board.dataset.playtestClock=String(Number(board.dataset.playtestClock)+1),25);
+    </script>`);
+  const report=await runGamePlaytest(page.mainFrame(),checks);
+  expect(report.steps).toMatchObject([{after:"0,0,0,2"},{before:"0,0,0,2",after:"2,0,0,0"}]);
+  await expect(runGamePlaytest(page.mainFrame(),checks.map(check=>({...check,signal:"clock"}))))
+    .rejects.toThrow(/在输入前已自行变化/);
 });

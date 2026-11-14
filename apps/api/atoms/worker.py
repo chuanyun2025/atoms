@@ -280,7 +280,7 @@ def recent_game_scenes(run):
     return [json.loads(row["raw_json"])["files"] for row in rows]
 
 
-async def validate_candidate(run,raw,attempt,*,slide_template=None,react=False,site_files=None,website_starter=None,preview_kind="web",required_game_dimension=None,retain=True,validator_slot=None):
+async def validate_candidate(run,raw,attempt,*,slide_template=None,react=False,site_files=None,website_starter=None,preview_kind="web",required_game_dimension=None,require_game_playtest=False,retain=True,validator_slot=None):
     rid,token=run["id"],run["lease_token"]
     if len(raw.encode())>32*1024*1024:
         raise ValueError("代码超过传输资源保护")
@@ -314,7 +314,8 @@ async def validate_candidate(run,raw,attempt,*,slide_template=None,react=False,s
             raise ValueError("本次游戏需要 2D 渲染。请用 DOM 或 Canvas 2D 实现并移除 Three.js 引用")
         async with validator_slot if validator_slot is not None else nullcontext():
             await asyncio.to_thread(stage,rid,token,"browser_check","检查预览和主要操作")
-            validation=await validate_artifact(artifact,rid,preview_kind,lightweight_3d)
+            validation=await validate_artifact(artifact,rid,preview_kind,lightweight_3d,
+                require_game_playtest=require_game_playtest)
         if not validation.get("ok"):
             diagnostic=validation.get("error","产物未通过检查")
             # During a rolling update an older validator still returns these service errors as 200.
@@ -325,6 +326,11 @@ async def validate_candidate(run,raw,attempt,*,slide_template=None,react=False,s
             raise ValueError(diagnostic)
         if validation.get("report",{}).get("acceptance")!="smoke" or not validation["report"].get("ready"):
             raise ModelError("VALIDATOR_UNAVAILABLE","启动检查未完成，已保留本次代码")
+        smoke=validation["report"].get("smoke",{})
+        if smoke.get("status")=="issue":
+            raise ValueError(smoke["diagnostic"])
+        if require_game_playtest and (smoke.get("status"),smoke.get("action"))!=("observed","gameplay_sequence"):
+            raise ModelError("VALIDATOR_UNAVAILABLE","校验服务未完成连续试玩，已保留本次代码")
         await asyncio.to_thread(publish_preview,run,validation["compiled"])
         if rendered_deck:
             validation["report"]["slide_renderer"]="template-deck-v1"
@@ -386,9 +392,6 @@ async def review_game(run, context, artifact, smoke):
 
 
 def quality_feedback(report):
-    smoke = report.get("smoke",{})
-    if smoke.get("status") == "issue":
-        return smoke["diagnostic"]
     return "\n".join(
         f'{item["path"]}: {item["problem"]}\n相关源码: {item["excerpt"]}'
         for item in report.get("source_review",{}).get("findings",[])
@@ -437,7 +440,8 @@ async def execute_run(run, *, validator_slot=None):
     website_starter=context.get("website_starter")
     validation_options={"preview_kind":context["project_kind"],"validator_slot":validator_slot,"required_game_dimension":dimension,
                         "slide_template":slide_template,"react":react,"site_files":site_files,
-                        "website_starter":website_starter}
+                        "website_starter":website_starter,
+                        "require_game_playtest":game and react}
     coordinated=react
     plan=None
     context["fps_required"]=fps_request
@@ -576,12 +580,9 @@ async def execute_run(run, *, validator_slot=None):
             continue
         report = validation["report"]
         if fallback:
-            original_report = fallback[1]["report"]
-            if artifact["files"] == fallback[0]["files"] or quality_feedback(report):
+            if report.get("smoke",{}).get("action")!="gameplay_sequence":
                 break
-            if original_report.get("smoke",{}).get("status") == "issue" and report.get("smoke",{}).get("status") != "observed":
-                break
-            findings = original_report.get("source_review",{}).get("findings",[])
+            findings = fallback[1]["report"]["source_review"]["findings"]
             if any(item["excerpt"] in artifact["files"].get(item["path"],"") for item in findings):
                 break
             fallback = None
@@ -593,7 +594,15 @@ async def execute_run(run, *, validator_slot=None):
             report["source_review"] = await review_game(run,context,artifact,report.get("smoke",{}))
         feedback = quality_feedback(report)
         remaining = run["started_at"] + settings().run_timeout_seconds - time.time() - 5
-        if not feedback or repair_round == MAX_REPAIR_ROUNDS or remaining <= 0:
+        if not feedback:
+            break
+        if report.get("smoke",{}).get("action")!="gameplay_sequence":
+            await asyncio.to_thread(keep_candidate,run,raw,feedback,attempt)
+            if repair_round==MAX_REPAIR_ROUNDS or remaining<=0:
+                raise ModelError("VALIDATION_FAILED","核心玩法未通过检查："+feedback[:950])
+            repair = {"candidate":raw,"diagnostics":feedback}
+            continue
+        if repair_round==MAX_REPAIR_ROUNDS or remaining<=0:
             break
         fallback = (artifact,validation)
         quality_deadline = asyncio.get_running_loop().time() + min(QUALITY_REPAIR_TIMEOUT,remaining)

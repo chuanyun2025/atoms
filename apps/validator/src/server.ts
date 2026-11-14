@@ -4,6 +4,7 @@ import { timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { compile } from "./compiler.js";
 import { compileReact } from "./react-compiler.js";
+import { readGamePlaytest } from "./game-delivery.js";
 const token = process.env.SERVICE_TOKEN || "";
 if (token.length < 24) throw new Error("SERVICE_TOKEN is required");
 let busy = false;
@@ -26,6 +27,7 @@ const server = http.createServer(async (req,res) => {
     const lightweight3d = input.lightweight_3d === true;
     const previewKind = input.preview_kind;
     if (previewKind !== undefined && !["web","game","slides"].includes(previewKind)) return reply(400,{error:"unsupported_preview_kind"});
+    const playtest = previewKind === "game" ? readGamePlaytest(input.artifact?.files,input.require_game_playtest===true) : undefined;
     const compiled = input.artifact?.schema_version==="2" ? await compileReact(input.artifact) : compile(input.artifact);
     const origin = new URL(input.app_origin).origin;
     if (origin !== process.env.APP_ORIGIN) throw new Error("APP_ORIGIN mismatch");
@@ -36,7 +38,7 @@ const server = http.createServer(async (req,res) => {
       const timer = setTimeout(() => {
         if (process.platform !== "win32") { try { process.kill(-child.pid!,"SIGKILL"); } catch {} } else child.kill("SIGKILL");
         if (!settled) { settled=true; reject(new BrowserProbeUnavailable("浏览器检查超时")); }
-      },lightweight3d ? 60000 : previewKind ? 18000 : 12000);
+      },lightweight3d ? 60000 : playtest ? 26000 : previewKind ? 18000 : 12000);
       child.stdout.on("data", b => { if (stdout.length<32000) stdout+=b; });
       child.stderr.on("data", b => { if (stderr.length<2000) stderr+=b; });
       child.on("error",() => { clearTimeout(timer); if (!settled) {settled=true; reject(new BrowserProbeUnavailable("无法启动浏览器检查进程"));} });
@@ -44,7 +46,7 @@ const server = http.createServer(async (req,res) => {
         clearTimeout(timer); if (settled) return; settled=true;
         try { resolve(JSON.parse(stdout)); } catch { reject(new BrowserProbeUnavailable("隔离浏览器进程未正常完成")); }
       });
-      child.stdin.end(JSON.stringify({compiled,origin,startupOnly:!previewKind,lightweight3d,previewKind}));
+      child.stdin.end(JSON.stringify({compiled,origin,startupOnly:!previewKind,lightweight3d,previewKind,playtest}));
     });
     if (result.code === "browser_unavailable") return reply(503,result);
     return reply(200,result.ok ? {ok:true,compiled,report:result.report} : result);

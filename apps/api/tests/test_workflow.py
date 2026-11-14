@@ -12,6 +12,9 @@ from conftest import create_project,submit
 ARTIFACT={"schema_version":"1","title":"计数器","summary":"支持计数和保存","files":{"index.html":"<button>计数</button>","styles.css":"body{color:green}","app.js":"void 0;"}}
 VALIDATION={"ok":True,"compiled":{"body_html":"<button>计数</button>","css_base64":"","js_base64":"dm9pZCAwOw==","digest":"test-digest","compiler_version":"1","sdk_version":"1"},"report":{"ready":True,"acceptance":"smoke"}}
 
+GAME_VALIDATION={**VALIDATION,"report":{**VALIDATION["report"],
+    "smoke":{"status":"observed","action":"gameplay_sequence"}}}
+
 
 def complete(client,project,prompt="创建计数器",request_key="request-test-key"):
     response=submit(client,project["id"],prompt,project["revision"],project["current_version_id"],request_key)

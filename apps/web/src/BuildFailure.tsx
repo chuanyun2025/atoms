@@ -32,6 +32,6 @@ export default function BuildFailure({message,hasVersion,stale,disabled,sending,
       <button className="failure-edit" disabled={sending} onClick={onEdit}>{stale?"基于当前版本修改":"调整需求"}<ArrowUpRight size={12}/></button>
     </div>
     <small>{stale?"项目已有更新，请基于当前版本继续构建。":"继续时按实际生成用量扣积分。"}</small>
-    {!validation&&cause!==message.content&&<details><summary>查看问题详情</summary><pre>{message.content}</pre></details>}
+    {cause!==message.content&&<details><summary>查看问题详情</summary><pre>{message.content}</pre></details>}
   </section>
 }

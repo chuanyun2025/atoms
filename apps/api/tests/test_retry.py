@@ -8,7 +8,7 @@ from atoms.db import transaction,one,execute,compact
 from atoms.model import ModelError,ModelResult,Usage
 from atoms.worker import claim,fail,keep_candidate,execute_run,LeaseLost
 from conftest import create_project,submit
-from test_workflow import ARTIFACT,VALIDATION,complete
+from test_workflow import ARTIFACT,GAME_VALIDATION,VALIDATION,complete
 
 
 def failed_candidate(client,p,raw=None):
@@ -221,7 +221,8 @@ def test_game_recovery_after_three_repairs_can_deliver_without_more_model_calls(
         body=json.loads(request.content)
         assert "behavior_check" not in body
         assert "game_smoke" not in body
-        return httpx.Response(200,json=VALIDATION)
+        assert body["require_game_playtest"] is True
+        return httpx.Response(200,json=GAME_VALIDATION)
 
     original=httpx.AsyncClient
     monkeypatch.setattr(httpx,"AsyncClient",lambda **kwargs:original(transport=httpx.MockTransport(validate)))

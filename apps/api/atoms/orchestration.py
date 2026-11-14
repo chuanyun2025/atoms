@@ -156,7 +156,7 @@ def decision_messages(role: str, context: dict) -> list[dict]:
             "以原创场景呈现。scene_direction 仅在用户未指定场景时提供灵感。"
             "用 game_genre 标记主玩法。固定屏清场、滚屏平台、三消、塔防分别用 arcade_platformer、platformer、match3、tower_defense。"
             "新游戏的 specialist_brief 说明初始状态、玩家反复做什么、有效动作怎样改变局势。玩法有结束与重开时，说明触发条件和重置范围。"
-            "游戏的 acceptance 描述从开局执行一次主操作、观察预期结果并继续操作的场景。按玩法补充最容易卡住的边界。"
+            "游戏的 acceptance 描述从开局连续执行两次有效操作的场景，各自列出可观察的预期结果。按玩法补充最容易卡住的边界。"
             "平台玩法的 acceptance 至少写一个从出生点出发、用正常输入成功落上必经平台并继续推进的实际操作。"
             "需求简短时，从 game_profile 选符合题材的挑战变化，让玩家在后续阶段调整打法。"
             "需求已有明确规则、范围或关卡数时按原要求规划。可选扩展放入 enhancements。"

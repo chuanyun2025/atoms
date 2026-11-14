@@ -87,7 +87,7 @@ test("游戏可操作时，缺少特定控件标记不会触发修复", async ({
   await expect(preview.getByText("晶体 1 / 3")).toBeVisible();
 });
 
-test("短测无需方向或玩法断言", async ({page})=>{
+test("方向相反时用真实键盘复现并修复", async ({page})=>{
   await page.goto("/games");
   await page.getByLabel("描述应用需求").fill("[game-input-repair] 做一个左右移动并收集晶体的浏览器游戏");
   await page.getByRole("button",{name:"开始创建",exact:true}).click();
@@ -95,8 +95,8 @@ test("短测无需方向或玩法断言", async ({page})=>{
   const path=(await page.getByRole("link",{name:"导出源码"}).getAttribute("href"))!;
   const version=await (await page.request.get(path.replace(/\/export$/,""))).json();
   const run=await (await page.request.get("/api/v1/runs/"+version.source_run_id)).json();
-  expect(run.model_calls).toBe(3);
-  expect(version.validation_report.acceptance).toBe("smoke");
+  expect(run.model_calls).toBe(4);
+  expect(version.validation_report.smoke).toMatchObject({action:"gameplay_sequence",steps:[{input:"ArrowLeft"},{input:"ArrowRight"}]});
 });
 
 test("轨道解谜可完成三关，飞行示例可操作、收集与暂停", async ({page,browser,baseURL})=>{
@@ -132,4 +132,39 @@ test("轨道解谜可完成三关，飞行示例可操作、收集与暂停", as
     await flight.getByRole("button",{name:"继续飞行",exact:true}).tap();
     await expect.poll(async()=>Number(await progress.getAttribute("value"))).toBeGreaterThan(Number(progressValue));
   }finally{await mobile.close();}
+});
+
+test("首次操作能走、第二次卡住时修复后再交付",async({page})=>{
+  await page.goto("/games");
+  await page.getByLabel("描述应用需求").fill("[game-stall] 制作一个可以连续收集晶体的浏览器游戏");
+  await page.getByRole("button",{name:"开始创建",exact:true}).click();
+  await expect(page.getByRole("button",{name:"查看版本 v1 预览",exact:true})).toBeVisible({timeout:45000});
+  const path=(await page.getByRole("link",{name:"导出源码"}).getAttribute("href"))!.replace(/\/export$/,"");
+  const version=await (await page.request.get(path)).json();
+  const run=await (await page.request.get("/api/v1/runs/"+version.source_run_id)).json();
+  expect(run).toMatchObject({status:"succeeded",model_calls:4});
+  expect(version.validation_report.smoke).toMatchObject({
+    status:"observed",action:"gameplay_sequence",steps:[{before:"0",after:"1"},{before:"1",after:"2"}],
+  });
+  const game=page.frameLocator('iframe[title="应用预览"]');
+  await game.getByRole("button",{name:"开始游戏"}).click();
+  await game.getByRole("button",{name:"收集晶体"}).click();
+  await game.getByRole("button",{name:"收集晶体"}).click();
+  await expect(game.getByText("晶体 2 / 3")).toBeVisible();
+});
+
+test("连续试玩反复卡住时结束构建，不交付该候选",async({page})=>{
+  await page.goto("/games");
+  await page.getByLabel("描述应用需求").fill("[game-stall] [repeat-stall] 制作一个可以连续收集晶体的浏览器游戏");
+  const accepted=page.waitForResponse(response=>response.url().endsWith("/runs") && response.status()===202);
+  await page.getByRole("button",{name:"开始创建",exact:true}).click();
+  const {id}=await (await accepted).json();
+  const failure=page.getByTestId("build-failure");
+  await expect(failure).toBeVisible({timeout:45000});
+  await failure.getByText("查看问题详情").click();
+  await expect(failure.locator("pre")).toContainText("连续试玩第 2 步");
+  const run=await (await page.request.get("/api/v1/runs/"+id)).json();
+  expect(run).toMatchObject({status:"failed",error_code:"VALIDATION_FAILED",result_version_id:null});
+  await expect(page.getByRole("link",{name:"导出源码"})).toHaveCount(0);
+  await expect(page.getByRole("button",{name:"继续修复",exact:true})).toBeVisible();
 });
