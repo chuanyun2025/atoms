@@ -163,6 +163,26 @@ def create_run(conn, owner, project_id, data, idempotency_key, ip):
     return public_run(one(conn,"SELECT * FROM runs WHERE id=:id",id=rid))
 
 
+def write_version(conn, project, run, artifact, validation, now):
+    compiled=validation["compiled"]
+    aid,vid=uid(),uid()
+    number=one(conn,"SELECT COALESCE(MAX(number),0)+1 n FROM versions WHERE project_id=:id",id=run["project_id"])["n"]
+    execute(conn,"INSERT INTO artifacts(id,raw_json,compiled_json,digest,compiler_version,sdk_version,validation_json,created_at) VALUES(:id,:raw,:compiled,:digest,:compiler,:sdk,:report,:now)",
+            id=aid,raw=compact(artifact),compiled=compact(compiled),digest=compiled["digest"],compiler=compiled["compiler_version"],sdk=compiled["sdk_version"],report=compact(validation["report"]),now=now)
+    execute(conn,"INSERT INTO versions(id,project_id,number,artifact_id,parent_version_id,source_run_id,title,summary,created_at) VALUES(:id,:pid,:number,:artifact,:parent,:run,:title,:summary,:now)",
+            id=vid,pid=run["project_id"],number=number,artifact=aid,parent=run["base_version_id"],run=run["id"],title=artifact["title"],summary=artifact["summary"],now=now)
+    execute(conn,"UPDATE projects SET current_version_id=:vid,revision=revision+1,active_run_id=NULL,title=:title,updated_at=:now WHERE id=:id",
+            vid=vid,title=artifact["title"] if not run["base_version_id"] else project["title"],now=now,id=run["project_id"])
+    execute(conn,"UPDATE runs SET status='succeeded',stage='completed',result_version_id=:vid,finished_at=:now,lease_until=NULL WHERE id=:id",vid=vid,now=now,id=run["id"])
+    return vid, number
+
+
+def announce_version(conn, run, vid, number, summary, now):
+    execute(conn,"INSERT INTO messages(id,project_id,run_id,role,content,created_at) VALUES(:id,:pid,:rid,'assistant',:summary,:now)",
+            id=uid(),pid=run["project_id"],rid=run["id"],summary=summary,now=now)
+    add_event(conn,run["id"],"completed",{"version_id":vid,"version_number":number,"message":summary})
+
+
 def restore_version(conn,owner,pid,vid,expected):
     row = project(conn,pid,owner)
     mutable(conn)

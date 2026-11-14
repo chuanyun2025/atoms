@@ -186,3 +186,62 @@ def test_preview_ticket_and_prototype_keys(client):
     assert "{{CONFIG" not in response.text
     assert client.get(ticket["url"]+"tampered",headers={"Sec-Fetch-Dest":"iframe","Sec-Fetch-Site":"same-origin"}).status_code==403
     assert client.patch("/api/v1/projects/"+p["id"]+"/app-state",json={"expected_revision":0,"set":{"__proto__":{"bad":1}}}).status_code==422
+
+def test_manual_source_save_keeps_invalid_files_out_of_version_history(client, monkeypatch):
+    import httpx
+
+    p,_=complete(client,create_project(client))
+    path=f"/api/v1/projects/{p['id']}/versions/{p['current_version_id']}/source"
+    headers={"Idempotency-Key":"manual-source-1"}
+    original=httpx.AsyncClient
+    candidates=[]
+
+    def validate(request):
+        payload=json.loads(request.content)
+        assert payload["preview_kind"]=="web"
+        files=payload["artifact"]["files"]
+        candidates.append(files)
+        if files["app.js"]=="const a =":
+            return httpx.Response(200,json={"ok":False,"error":"app.js:1:10 Unexpected end of input"})
+        return httpx.Response(200,json=VALIDATION)
+
+    monkeypatch.setattr(httpx,"AsyncClient",lambda **kwargs:original(transport=httpx.MockTransport(validate)))
+    invalid={"expected_revision":p["revision"],"files":{"app.js":"const a ="}}
+    failed=client.post(path,json=invalid,headers=headers)
+    assert failed.status_code==422
+    assert "app.js:1:10" in failed.json()["detail"]["message"]
+    versions=f"/api/v1/projects/{p['id']}/versions"
+    assert len(client.get(versions).json()["items"])==1
+
+    valid={**invalid,"files":{"app.js":"const a = 2;","styles.css":""}}
+    saved=client.post(path,json=valid,headers=headers)
+    assert saved.status_code==200,saved.text
+    result=saved.json()
+    assert result["number"]==2 and result["parent_version_id"]==p["current_version_id"]
+    assert result["artifact"]["files"]=={**ARTIFACT["files"],**valid["files"]}
+    assert client.get(versions+"/"+p["current_version_id"]).json()["artifact"]==ARTIFACT
+    assert client.post(path,json=valid,headers=headers).json()["id"]==result["id"]
+    assert client.post(path,json=valid,headers={"Idempotency-Key":"manual-source-2"}).status_code==409
+    assert len(candidates)==2
+    with transaction() as conn:
+        assert one(conn,"SELECT COUNT(*) n FROM model_calls")["n"]==0
+
+
+def test_manual_source_commit_rechecks_revision_after_compilation(client, monkeypatch):
+    import httpx
+
+    p,_=complete(client,create_project(client))
+    path=f"/api/v1/projects/{p['id']}/versions/{p['current_version_id']}/source"
+    original=httpx.AsyncClient
+
+    def validate(request):
+        with transaction(True) as conn:
+            execute(conn,"UPDATE projects SET revision=revision+1 WHERE id=:id",id=p["id"])
+        return httpx.Response(200,json=VALIDATION)
+
+    monkeypatch.setattr(httpx,"AsyncClient",lambda **kwargs:original(transport=httpx.MockTransport(validate)))
+    result=client.post(path,json={"expected_revision":p["revision"],"files":{"app.js":"void 1;"}},
+                       headers={"Idempotency-Key":"manual-source-3"})
+    assert result.status_code==409
+    assert result.json()["detail"]["code"]=="revision_conflict"
+    assert len(client.get(f"/api/v1/projects/{p['id']}/versions").json()["items"])==1

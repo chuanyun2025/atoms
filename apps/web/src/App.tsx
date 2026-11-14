@@ -3,12 +3,10 @@ import {Link,NavLink,Route,Routes,useParams} from "react-router-dom";
 import Modal from "./Modal";
 import WalletButton,{useWallet} from "./Wallet";
 import {useQuery,useQueryClient} from "@tanstack/react-query";
-import {ArrowUp,Plus,Layers3,PanelLeftClose,PanelLeftOpen,Settings2,ChevronDown,Check,CheckCircle2,Code2,Eye,Download,History,Monitor,Smartphone,RotateCcw,X,Sparkles,LayoutGrid,ArrowLeft,LoaderCircle,AlertCircle,Braces,House,Menu,ChevronRight} from "lucide-react";
+import {ArrowUp,Plus,Layers3,PanelLeftClose,PanelLeftOpen,Settings2,ChevronDown,Check,CheckCircle2,Code2,Eye,Download,History,Monitor,Smartphone,RotateCcw,X,Sparkles,LayoutGrid,ArrowLeft,LoaderCircle,AlertCircle,Braces,House,Menu,ChevronRight,Save} from "lucide-react";
 import {api,active,ApiError,date,key,type Message,type Project,type ProjectKind,type Run,type RunSource,type Version} from "./api";
 import {creationKinds,modes} from "./creationModes";
 import {StudioLanding,StudioHeader,ProjectLibrary,useProjects,useCapabilities} from "./Studio";
-const LazyCode=lazy(()=>import("./Code"));
-function Code({files}:{files:Record<string,string>}){return <Suspense fallback={<div className="preview-loading">正在加载代码查看器…</div>}><LazyCode files={files}/></Suspense>}
 import Preview from "./Preview";
 import PublishedPage,{PublishButton} from "./Publication";
 import BuildFailure from "./BuildFailure";
@@ -75,11 +73,18 @@ function StudioRoute({kind,children}:{kind?:ProjectKind;children?:ReactNode}){
   </div>;
 }
 
+const Code=lazy(()=>import("./Code"));
+const emptyEdits: Record<string,string> = {};
+
 function Workspace(){
   const {pid=""}=useParams(),client=useQueryClient();
   const [menuOpen,setMenuOpen]=useState(false);
   const [collapsed,setCollapsed]=useState(true),[prompt,setPrompt]=useState(()=>sessionStorage.getItem("atoms:draft:"+pid)||""),[error,setError]=useState(()=>sessionStorage.getItem("atoms:startup-error:"+pid)||""),[sending,setSending]=useState(false);
   const [tab,setTab]=useState<"preview"|"code"|null>(null),[selected,setSelected]=useState<string|null>(null),[phone,setPhone]=useState(false),[reload,setReload]=useState(0),[saved,setSaved]=useState("已保存"),[history,setHistory]=useState(false),[restore,setRestore]=useState<Version>(),[restoring,setRestoring]=useState(false),[mobileView,setMobileView]=useState("preview");
+  const [edits,setEdits]=useState<Record<string,Record<string,string>>>({});
+  const [sourceResult,setSourceResult]=useState<{vid:string;error?:string;number?:number}>();
+  const [savingSource,setSavingSource]=useState(false);
+  const sourceRequest=useRef<{body:string;key:string}>(null);
   const bottom=useRef<HTMLDivElement>(null);
   const {data:project,error:projectError}=useQuery({queryKey:["project",pid],queryFn:()=>api<Project>("/projects/"+pid)});
   const {data:messages}=useQuery({queryKey:["messages",pid],queryFn:()=>api<{items:Message[]}>("/projects/"+pid+"/messages")});
@@ -104,6 +109,11 @@ function Workspace(){
   const canPreview=draftPreview||!!version?.artifact;
   const displayTab=files&&(tab==="code"||!canPreview)?"code":"preview";
   const showingDraft=displayTab==="code"?!!source:draftPreview;
+  const editableSource=!!version?.artifact&&["1","2"].includes(version.artifact.schema_version)
+    &&!source&&!historical&&!busy&&!cap?.read_only;
+  const currentEdits=vid&&!source?edits[vid]??emptyEdits:emptyEdits;
+  const hasEdits=Object.keys(currentEdits).length>0;
+  const saveResult=sourceResult?.vid===vid?sourceResult:undefined;
   const switchTab=(next:"preview"|"code")=>{setTab(next);setMobileView("preview")};
   const versionsByRun=new Map(versions?.items.map(item=>[item.source_run_id,item]));
   const recoveredRuns=new Set<string>();
@@ -138,12 +148,47 @@ function Workspace(){
   useEffect(()=>{
     if(busy&&run&&!active(run))void refresh();
   },[busy,run?.status,refresh]);
+  function editSource(path:string,value:string){
+    if(!vid||!files||!editableSource||savingSource)return;
+    setEdits(previous=>{
+      const next={...previous[vid]};
+      if(value===files[path])delete next[path];
+      else next[path]=value;
+      return {...previous,[vid]:next};
+    });
+    setSourceResult(undefined);
+  }
+  async function saveSource(){
+    if(!project||!vid||!editableSource||!hasEdits||savingSource||sending||restoring)return;
+    const payload={expected_revision:project.revision,files:currentEdits};
+    const body=JSON.stringify([vid,payload]);
+    if(sourceRequest.current?.body!==body)sourceRequest.current={body,key:key()};
+    setSavingSource(true);
+    setSourceResult(undefined);
+    try{
+      const result=await api<Version>("/projects/"+pid+"/versions/"+vid+"/source","POST",payload,
+        {"Idempotency-Key":sourceRequest.current.key});
+      client.setQueryData(["version",pid,result.id],result);
+      await refresh();
+      sourceRequest.current=null;
+      setEdits(previous=>{
+        const next={...previous};
+        delete next[vid];
+        return next;
+      });
+      setSourceResult({vid:result.id,number:result.number});
+    }catch(e){
+      setSourceResult({vid,error:e instanceof ApiError?e.message:"保存连接中断，请重新保存。草稿已保留。"});
+    }finally{
+      setSavingSource(false);
+    }
+  }
   async function submit(e:FormEvent){
     e.preventDefault();
     await sendRun(prompt);
   }
   async function sendRun(request:string,retryOf?:string){
-    if(!project||!request.trim()||sending||busy)return;
+    if(!project||!request.trim()||sending||busy||savingSource)return;
     setSending(true);setError("");
     const storageKey="atoms:pending:"+pid;
     let pending:{id:string;body:{prompt:string;expected_revision:number;base_version_id:string|null;retry_of_run_id?:string}}|undefined;
@@ -161,7 +206,7 @@ function Workspace(){
     }finally{setSending(false)}
   }
   async function doRestore(){
-    if(!project||!restore)return;setRestoring(true);setError("");
+    if(!project||!restore||savingSource)return;setRestoring(true);setError("");
     try{await api("/projects/"+pid+"/versions/"+restore.id+"/restore","POST",{expected_revision:project.revision});setSelected(null);setRestore(undefined);setHistory(false);await refresh();setReload(n=>n+1)}
     catch(e){setError((e as Error).message)}finally{setRestoring(false)}
   }
@@ -200,7 +245,7 @@ function Workspace(){
           {failed && recoveredRuns.has(message.run_id) ? <div className="message-content">这次构建已修复。</div>
           : failed ? <BuildFailure message={message} hasVersion={!!project?.current_version_id}
             stale={(message.run_base_version_id??null)!==(project?.current_version_id??null)}
-            disabled={busy||!!cap?.read_only||!cap?.model_configured||!cap?.worker_available||(!message.has_candidate&&(wallet?.available_units??0)<100)}
+            disabled={busy||savingSource||!!cap?.read_only||!cap?.model_configured||!cap?.worker_available||(!message.has_candidate&&(wallet?.available_units??0)<100)}
             sending={sending} onRetry={()=>void sendRun(originalPrompt(),message.run_id)}
             onEdit={()=>{setPrompt(originalPrompt());document.getElementById("chat-prompt")?.focus()}}/>
           : <div className="message-content">{message.content}</div>}
@@ -215,8 +260,13 @@ function Workspace(){
         onPreview={draftPreview?()=>switchTab("preview"):undefined}/>
       <div ref={bottom}/></div>
       <div className="chat-compose-area">{wallet&&wallet.available_units<100&&<div className="capability-warning">可用积分不足；已有预览、版本和导出仍可使用。</div>}{!cap?.model_configured&&<div className="capability-warning"><AlertCircle size={15}/><span>模型待配置，连接后即可生成应用。</span></div>}{cap?.read_only&&<div className="capability-warning">系统维护中，当前只读。</div>}{error&&<div className="inline-error" role="alert">{error}<button aria-label="关闭错误" onClick={()=>setError("")}><X size={13}/></button></div>}
-      <form className="chat-composer" onSubmit={submit}><label className="sr-only" htmlFor="chat-prompt">描述需求或修改</label><textarea id="chat-prompt" placeholder={project?.current_version_id?"描述下一步修改…":"详细描述你想创建的应用…"} maxLength={100000} value={prompt} onChange={e=>setPrompt(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&(e.ctrlKey||e.metaKey)){e.preventDefault();e.currentTarget.form?.requestSubmit()}}}/><div><span>{busy?"构建期间可以离开此页面":project?.current_version_id?"基于当前版本继续构建":"准备好，就开始吧"}{!busy&&prompt.length>0&&<span className="prompt-length">{prompt.length} / 100000 字</span>}</span><button aria-label="提交需求" disabled={!prompt.trim()||sending||busy||(wallet?.available_units??0)<100||!cap?.model_configured||!cap?.worker_available||cap?.read_only}>{sending?<LoaderCircle size={16} className="spin"/>:<ArrowUp size={18}/>}</button></div></form><p className="chat-footnote">Ctrl / ⌘ + Enter 发送 · AI 生成结果请实际验证</p></div></section>
-      <section className="build-panel"><div className="preview-toolbar">
+      <form className="chat-composer" onSubmit={submit}><label className="sr-only" htmlFor="chat-prompt">描述需求或修改</label><textarea id="chat-prompt" placeholder={project?.current_version_id?"描述下一步修改…":"详细描述你想创建的应用…"} maxLength={100000} value={prompt} onChange={e=>setPrompt(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&(e.ctrlKey||e.metaKey)){e.preventDefault();e.currentTarget.form?.requestSubmit()}}}/><div><span>{busy?"构建期间可以离开此页面":project?.current_version_id?"基于当前版本继续构建":"准备好，就开始吧"}{!busy&&prompt.length>0&&<span className="prompt-length">{prompt.length} / 100000 字</span>}</span><button aria-label="提交需求" disabled={!prompt.trim()||sending||busy||savingSource||(wallet?.available_units??0)<100||!cap?.model_configured||!cap?.worker_available||cap?.read_only}>{sending?<LoaderCircle size={16} className="spin"/>:<ArrowUp size={18}/>}</button></div></form><p className="chat-footnote">Ctrl / ⌘ + Enter 发送 · AI 生成结果请实际验证</p></div></section>
+      <section className="build-panel" onKeyDown={event=>{
+        if(displayTab==="code"&&(event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==="s"){
+          event.preventDefault();
+          void saveSource();
+        }
+      }}><div className="preview-toolbar">
         <div className="view-tabs">
           <button className={displayTab==="preview"?"selected":""} aria-pressed={displayTab==="preview"} disabled={!canPreview} onClick={()=>switchTab("preview")}><Eye size={15}/>预览</button>
           <button className={displayTab==="code"?"selected":""} aria-pressed={displayTab==="code"} disabled={!files} onClick={()=>switchTab("code")}><Code2 size={15}/>代码</button>
@@ -230,9 +280,22 @@ function Workspace(){
           <button className="icon-button" aria-label="重新加载预览" disabled={!canPreview||displayTab==="code"} onClick={()=>setReload(n=>n+1)}><RotateCcw size={15}/></button>
         </div>
       </div>
-      {historical&&<div className="history-banner"><History size={14}/><span>正在查看历史 v{version?.number}，业务数据只读</span><button onClick={()=>setSelected(null)}>回到当前</button><button disabled={busy||cap?.read_only} onClick={()=>version&&setRestore(version)}>恢复此版本</button></div>}
+      {historical&&<div className="history-banner"><History size={14}/><span>正在查看历史 v{version?.number}，业务数据只读</span><button onClick={()=>setSelected(null)}>回到当前</button><button disabled={busy||savingSource||cap?.read_only} onClick={()=>version&&setRestore(version)}>恢复此版本</button></div>}
+      {displayTab==="code"&&files&&!source&&(editableSource||hasEdits)&&<div className="source-tools">
+        <div className="source-toolbar">
+          <span role="status">{savingSource?"正在校验并打包…":hasEdits?"有未保存的修改":saveResult?.number?"已保存为 v"+saveResult.number:"编辑后可保存为新版本"}</span>
+          <button type="button" disabled={!editableSource||!hasEdits||savingSource||sending||restoring} onClick={()=>void saveSource()}>
+            {savingSource?<LoaderCircle size={15} className="spin"/>:<Save size={15}/>}保存源码
+          </button>
+        </div>
+        {saveResult?.error&&<div className="source-diagnostic" role="alert">
+          <strong>保存失败，修改已保留</strong><pre>{saveResult.error}</pre>
+        </div>}
+      </div>}
       <div className="build-content">
-        {displayTab==="code"&&files?<Code files={files}/>
+        {displayTab==="code"&&files?<Suspense fallback={<div className="preview-loading">正在加载代码编辑器…</div>}>
+          <Code files={files} edits={currentEdits} editable={editableSource&&!savingSource} onEdit={editSource}/>
+        </Suspense>
           :draftPreview&&runId?<Preview key={runId} pid={pid} runId={runId} reload={reload} phone={phone} onSaved={setSaved}/>
           :vid&&version?.artifact?<Preview key={vid} pid={pid} vid={vid} reload={reload} phone={phone} onSaved={setSaved}/>
           :<div className="workspace-empty">
@@ -245,10 +308,10 @@ function Workspace(){
       <div className="preview-statusbar">
         <span><span className={"status-dot "+(saved==="未保存"&&!showingDraft?"red":"")}/>
           {showingDraft?(displayTab==="code"?(busy?"构建源码 · 只读":"未发布源码 · 只读"):"临时预览 · 操作不保存")
-            :historical?"历史版本 · 只读":displayTab==="code"?"版本源码 · 只读":canPreview?saved:busy?"正在构建":"暂无预览"}</span>
+            :historical?"历史版本 · 只读":displayTab==="code"?(editableSource?"当前版本源码":"版本源码 · 只读"):canPreview?saved:busy?"正在构建":"暂无预览"}</span>
         {(source||version?.artifact)&&<span>{!showingDraft&&version?"v"+version.number+" · ":""}{(source?.schema_version??version?.artifact?.schema_version)==="2"?"React / TypeScript":"HTML / CSS / JavaScript"}</span>}
       </div>
-      {history&&<aside className="history-panel"><div><h3>版本记录</h3><button className="icon-button" aria-label="关闭版本记录" onClick={()=>setHistory(false)}><X size={17}/></button></div><p>每次通过校验的构建都会保存。</p>{versions?.items.length===0&&<div className="history-empty">还没有可用版本</div>}{versions?.items.map(v=><button key={v.id} className={"history-item "+(v.id===vid?"selected":"")} onClick={()=>showVersion(v.id)}><span><strong>版本 {v.number}</strong>{v.id===project?.current_version_id?<small>当前版本</small>:<ChevronRight size={14}/>}</span><p>{v.summary}</p><time>{date(v.created_at)}</time></button>)}</aside>}
+      {history&&<aside className="history-panel"><div><h3>版本记录</h3><button className="icon-button" aria-label="关闭版本记录" onClick={()=>setHistory(false)}><X size={17}/></button></div><p>构建和源码修改通过校验后会保存为新版本。</p>{versions?.items.length===0&&<div className="history-empty">还没有可用版本</div>}{versions?.items.map(v=><button key={v.id} className={"history-item "+(v.id===vid?"selected":"")} onClick={()=>showVersion(v.id)}><span><strong>版本 {v.number}</strong>{v.id===project?.current_version_id?<small>当前版本</small>:<ChevronRight size={14}/>}</span><p>{v.summary}</p><time>{date(v.created_at)}</time></button>)}</aside>}
       </section>
     </div>
     {restore&&<Modal title={"恢复到版本 "+restore.number} onClose={()=>setRestore(undefined)}><p>当前代码将切换到这个版本，所有历史版本继续保留。</p><p className="muted">业务数据保持现状，不随代码回滚。恢复后再修改，会基于这个版本创建新的版本。</p><div className="modal-actions"><button className="plain-button" onClick={()=>setRestore(undefined)}>取消</button><button className="create-button" disabled={restoring} onClick={doRestore}>{restoring?<LoaderCircle className="spin" size={16}/>:"确认恢复"}</button></div></Modal>}

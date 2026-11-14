@@ -119,3 +119,41 @@ test("生成、持久化、失败恢复、历史分支与导出",async({page,bro
   await expect(preview.getByRole("button",{name:"增加两次"})).toBeVisible();
   await page.screenshot({path:"test-results/workspace-mobile.png",fullPage:true});
 });
+
+test("手动源码保存返回打包错误，修正后更新预览和版本",async({page})=>{
+  await page.goto("/");
+  await page.getByLabel("描述应用需求").fill("创建一个可以保存数据的计数器");
+  await page.getByRole("button",{name:"开始创建",exact:true}).click();
+  const preview=page.frameLocator('iframe[title="应用预览"]');
+  await expect(preview.getByRole("button",{name:"增加一次"})).toBeVisible();
+  await page.getByRole("button",{name:"代码",exact:true}).click();
+  const editor=page.getByRole("textbox",{name:"src/App.tsx"});
+  const save=page.getByRole("button",{name:"保存源码",exact:true});
+  await expect(editor).toHaveAttribute("contenteditable","true");
+  await expect(save).toBeDisabled();
+  const original=(await editor.innerText()).trimEnd();
+  const invalid="export default function App() { return <";
+  await editor.fill(invalid);
+  await save.click();
+  const diagnostic=page.locator(".source-diagnostic");
+  await expect(diagnostic).toContainText("保存失败，修改已保留");
+  await expect(diagnostic).toContainText("src/App.tsx");
+  await expect(editor).toHaveText(invalid);
+  await expect(page.getByRole("button",{name:"v1",exact:true})).toBeVisible();
+
+  await page.getByRole("button",{name:"预览",exact:true}).click();
+  await expect(preview.getByRole("button",{name:"增加一次"})).toBeVisible();
+  await page.getByRole("button",{name:"代码",exact:true}).click();
+  await expect(editor).toHaveText(invalid);
+  await editor.fill(original.replace("增加一次","手动加一"));
+  await editor.press("Control+s");
+  await expect(page.getByText("已保存为 v2",{exact:true})).toBeVisible();
+  await page.getByRole("button",{name:"预览",exact:true}).click();
+  await expect(preview.getByRole("button",{name:"手动加一"})).toBeVisible();
+  await page.getByRole("button",{name:"版本记录",exact:true}).click();
+  await expect(page.locator(".history-item").filter({hasText:"版本 2"})).toContainText("手动编辑源码");
+  await page.locator(".history-item").filter({hasText:"版本 1"}).click();
+  await page.getByRole("button",{name:"关闭版本记录"}).click();
+  await page.getByRole("button",{name:"代码",exact:true}).click();
+  await expect(editor).toHaveAttribute("contenteditable","false");
+});

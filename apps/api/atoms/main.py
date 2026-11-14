@@ -8,7 +8,8 @@ from starlette.concurrency import run_in_threadpool
 from .config import settings
 from .db import transaction, all_rows, one, compact
 from .security import COOKIE, create_session, csrf, visitor, origin_check, ticket_encode, ticket_decode, uid
-from .schemas import ProjectCreate, RunCreate, Restore, StatePatch, ImageUpload
+from .schemas import ProjectCreate, RunCreate, Restore, SourceSave, StatePatch, ImageUpload
+from .source_edits import source_artifact, save_source_version, validate_source
 from .media import asset_path, owned_asset, upload_image
 from . import service
 from . import credits
@@ -40,7 +41,11 @@ app.include_router(publication_router)
 @app.middleware("http")
 async def boundaries(request,call_next):
     size = request.headers.get("content-length","0")
-    maximum=8*1024*1024 if request.url.path.endswith("/media/images") else 2*1024*1024
+    large_request = request.url.path.endswith("/media/images") or (
+        request.method == "POST" and request.url.path.startswith("/api/v1/projects/")
+        and "/versions/" in request.url.path and request.url.path.endswith("/source")
+    )
+    maximum=(8 if large_request else 2)*1024*1024
     if not size.isdecimal() or int(size)>maximum:
         return JSONResponse({"detail":{"code":"request_too_large","message":"请求过大"}},413)
     if request.method in {"POST","PATCH","PUT","DELETE"} and request.url.path.startswith("/api/v1/"):
@@ -276,6 +281,16 @@ def version_get(pid:str,vid:str,user=Depends(visitor)):
     with transaction() as conn:
         service.project(conn,pid,user["id"])
         return service.public_version(service.owned_version(conn,pid,vid),True)
+
+
+@app.post("/api/v1/projects/{pid}/versions/{vid}/source")
+async def save_version_source(pid:str,vid:str,data:SourceSave,idempotency_key:str=Header(default=""),user=Depends(visitor)):
+    owner=user["id"]
+    replay,artifact,kind=await run_in_threadpool(source_artifact,owner,pid,vid,data,idempotency_key)
+    if replay:
+        return replay
+    validation=await validate_source(artifact,kind)
+    return await run_in_threadpool(save_source_version,owner,pid,vid,data,idempotency_key,artifact,validation)
 
 
 @app.post("/api/v1/projects/{pid}/versions/{vid}/restore")

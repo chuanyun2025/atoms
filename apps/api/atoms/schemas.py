@@ -42,6 +42,10 @@ class Restore(StrictModel):
     expected_revision: int = Field(ge=0)
 
 
+class SourceSave(Restore):
+    files: dict[str,str] = Field(min_length=1)
+
+
 class StatePatch(StrictModel):
     expected_revision: int = Field(ge=0)
     version_id: str | None = None

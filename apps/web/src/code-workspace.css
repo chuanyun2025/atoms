@@ -47,3 +47,44 @@
   .react-code-panel { grid-template-columns: minmax(0,1fr); grid-template-rows: minmax(100px,26%) minmax(0,1fr); }
   .code-file-browser { border-right: 0; border-bottom: 1px solid #e3e9f4; }
 }
+
+.source-tools {
+  flex-shrink: 0;
+  background: #f8faff;
+  border-bottom: 1px solid #e3e9f4;
+  color: #405172;
+  font-size: 12px;
+}
+.source-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 12px;
+}
+.source-toolbar button {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: #3052d8;
+  color: #fff;
+}
+.source-toolbar button:disabled { background: #e9edf7; color: #546582; }
+.source-diagnostic {
+  margin: 0 12px 8px;
+  padding: 8px 11px;
+  border: 1px solid #ebcfc7;
+  border-radius: 6px;
+  background: #fff6f3;
+  color: #8b3426;
+}
+.source-diagnostic pre {
+  margin: 4px 0 0;
+  max-height: 120px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

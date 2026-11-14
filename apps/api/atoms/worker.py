@@ -10,6 +10,8 @@ import httpx
 from .config import settings
 from .db import transaction,execute,one,all_rows,compact,add_event,maintenance
 from .security import uid
+from .service import announce_version,write_version
+from .validator_client import validate_artifact
 from .artifacts import normalize_artifact,strict_json
 from .exchange_rates import RATES_FILE, reference_rates, wants_exchange_rates
 from .editorial_feed import NEWS_FILE, editorial_snapshot, has_editorial_snapshot, wants_editorial_feed
@@ -203,19 +205,8 @@ def commit(run,artifact,validation):
         project=one(conn,"SELECT * FROM projects WHERE id=:id",id=run["project_id"])
         if project["active_run_id"]!=run["id"] or project["revision"]!=run["expected_revision"] or project["current_version_id"]!=run["base_version_id"]:
             raise ModelError("COMMIT_CONFLICT","项目基础版本已变化，未覆盖现有版本")
-        compiled=validation["compiled"]
-        aid,vid=uid(),uid()
-        number=one(conn,"SELECT COALESCE(MAX(number),0)+1 n FROM versions WHERE project_id=:id",id=run["project_id"])["n"]
-        execute(conn,"INSERT INTO artifacts(id,raw_json,compiled_json,digest,compiler_version,sdk_version,validation_json,created_at) VALUES(:id,:raw,:compiled,:digest,:compiler,:sdk,:report,:now)",
-                id=aid,raw=compact(artifact),compiled=compact(compiled),digest=compiled["digest"],compiler=compiled["compiler_version"],sdk=compiled["sdk_version"],report=compact(validation["report"]),now=now)
-        execute(conn,"INSERT INTO versions(id,project_id,number,artifact_id,parent_version_id,source_run_id,title,summary,created_at) VALUES(:id,:pid,:number,:artifact,:parent,:run,:title,:summary,:now)",
-                id=vid,pid=run["project_id"],number=number,artifact=aid,parent=run["base_version_id"],run=run["id"],title=artifact["title"],summary=artifact["summary"],now=now)
-        execute(conn,"UPDATE projects SET current_version_id=:vid,revision=revision+1,active_run_id=NULL,title=:title,updated_at=:now WHERE id=:id",
-                vid=vid,title=artifact["title"] if not run["base_version_id"] else project["title"],now=now,id=run["project_id"])
-        execute(conn,"UPDATE runs SET status='succeeded',stage='completed',result_version_id=:vid,finished_at=:now,lease_until=NULL WHERE id=:id",vid=vid,now=now,id=run["id"])
-        execute(conn,"INSERT INTO messages(id,project_id,run_id,role,content,created_at) VALUES(:id,:pid,:rid,'assistant',:summary,:now)",
-                id=uid(),pid=run["project_id"],rid=run["id"],summary=artifact["summary"],now=now)
-        add_event(conn,run["id"],"completed",{"version_id":vid,"version_number":number,"message":artifact["summary"]})
+        vid,number=write_version(conn,project,run,artifact,validation,now)
+        announce_version(conn,run,vid,number,artifact["summary"],now)
         execute(conn,"DELETE FROM run_candidates WHERE run_id=:id",id=run["id"])
         execute(conn,"DELETE FROM run_workspace WHERE run_id=:id",id=run["id"])
 
@@ -321,16 +312,9 @@ async def validate_candidate(run,raw,attempt,*,slide_template=None,react=False,s
         lightweight_3d=game and has_threejs(artifact)
         if required_game_dimension=="2d" and lightweight_3d:
             raise ValueError("本次游戏需要 2D 渲染。请用 DOM 或 Canvas 2D 实现并移除 Three.js 引用")
-        timeout=65 if lightweight_3d else 23
         async with validator_slot if validator_slot is not None else nullcontext():
             await asyncio.to_thread(stage,rid,token,"browser_check","检查预览和主要操作")
-            async with httpx.AsyncClient(timeout=timeout,trust_env=False) as client:
-                response=await client.post(settings().validator_url+"/internal/validate",
-                    headers={"Authorization":"Bearer "+settings().service_token},
-                    json={"artifact":artifact,"app_origin":settings().app_origin,"request_id":rid,
-                          "lightweight_3d":lightweight_3d,"preview_kind":preview_kind})
-                response.raise_for_status()
-                validation=response.json()
+            validation=await validate_artifact(artifact,rid,preview_kind,lightweight_3d)
         if not validation.get("ok"):
             diagnostic=validation.get("error","产物未通过检查")
             # During a rolling update an older validator still returns these service errors as 200.
