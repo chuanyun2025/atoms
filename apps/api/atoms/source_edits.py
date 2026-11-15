@@ -87,7 +87,7 @@ async def validate_source(artifact, kind):
         compiled = validation.get("compiled")
         required = ("body_html", "css_base64", "js_base64", "digest", "compiler_version", "sdk_version")
         if (validation.get("ok") is True and isinstance(report, dict) and report.get("ready") is True
-                and report.get("acceptance") == "smoke" and isinstance(compiled, dict)
+                and report.get("acceptance") == "startup" and isinstance(compiled, dict)
                 and all(isinstance(compiled.get(field), str) for field in required)):
             return validation
     service.error(503, "validator_unavailable", "校验服务未完成预览检查，请稍后重新保存")

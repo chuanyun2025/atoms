@@ -1,6 +1,27 @@
 import {test, expect} from "@playwright/test";
 
-test("游戏点击后抛错时自动修复再交付",async({page})=>{
+for (const [request,genre,example] of [
+  ["生成一个2048游戏，方向键和按钮都可以移动","tile_merge","[0,0,0,4]"],
+  ["做一个平台跳跃游戏，玩家能跳上第一处必经平台","platformer","第一处平台实际顶面"],
+]) {
+  test(`游戏 ${genre} 的玩法规则和自测例子随版本保存`, async ({page})=>{
+    await page.goto("/games");
+    await page.getByLabel("描述应用需求").fill(request);
+    await page.getByRole("button",{name:"开始创建",exact:true}).click();
+    await expect(page.getByRole("button",{name:"查看版本 v1 预览",exact:true})).toBeVisible();
+    const path=(await page.getByRole("link",{name:"导出源码"}).getAttribute("href"))!;
+    const version=await (await page.request.get(path.replace(/\/export$/,""))).json();
+    const run=await (await page.request.get("/api/v1/runs/"+version.source_run_id)).json();
+    expect(run).toMatchObject({status:"succeeded",model_calls:2});
+    const plan=JSON.parse(version.artifact.files["src/agent/plan.json"]);
+    expect(plan.game_genre).toBe(genre);
+    expect(plan.mechanics.examples[0].expected).toContain(example);
+    expect(version.validation_report.task_plan.mechanics).toEqual(plan.mechanics);
+    expect(version.validation_report.acceptance).toBe("startup");
+  });
+}
+
+test("启动检查不会自行点击游戏控件",async({page})=>{
   await page.goto("/games");
   await page.getByLabel("描述应用需求").fill("[game-click-error] 制作一个浏览器游戏");
   await page.getByRole("button",{name:"开始创建",exact:true}).click();
@@ -8,9 +29,10 @@ test("游戏点击后抛错时自动修复再交付",async({page})=>{
   const path=(await page.getByRole("link",{name:"导出源码"}).getAttribute("href"))!;
   const version=await (await page.request.get(path.replace(/\/export$/,""))).json();
   const run=await (await page.request.get("/api/v1/runs/"+version.source_run_id)).json();
-  expect(run).toMatchObject({status:"succeeded",model_calls:4});
-  expect(version.validation_report).toMatchObject({ready:true,acceptance:"smoke"});
-  expect(version.validation_report.smoke.status).toBe("observed");
+  expect(run).toMatchObject({status:"succeeded",model_calls:2});
+  expect(version.validation_report).toMatchObject({ready:true,acceptance:"startup"});
+  expect(version.validation_report.smoke).toBeUndefined();
+  expect(version.validation_report.source_review).toBeUndefined();
   await expect(page.getByTestId("build-failure")).toHaveCount(0);
 });
 
@@ -23,7 +45,7 @@ test("游戏启动抛出异常时自动修复，并交付玩法设计与工程�
   const path=(await page.getByRole("link",{name:"导出源码"}).getAttribute("href"))!;
   const version=await (await page.request.get(path.replace(/\/export$/,""))).json();
   const run=await (await page.request.get("/api/v1/runs/"+version.source_run_id)).json();
-  expect(run.model_calls).toBe(4);
+  expect(run.model_calls).toBe(3);
   expect(version.artifact.schema_version).toBe("2");
   expect(JSON.parse(version.artifact.files["src/game/design.json"]).loop).toHaveLength(3);
   expect(version.artifact.files).toHaveProperty(["src/game/engine.ts"]);
@@ -39,22 +61,6 @@ test("游戏启动抛出异常时自动修复，并交付玩法设计与工程�
   await expect(page.locator(".cm-content")).toContainText("收齐三颗晶体");
 });
 
-for (const repeat of [false,true]) {
-  test(repeat ? "同一个源码问题修复无进展时，保存可运行候选并结束"
-    : "游戏源码审查发现核心问题时修复一次",async({page})=>{
-    await page.goto("/games");
-    await page.getByLabel("描述应用需求").fill("[review-repair] "+(repeat?"[repeat-review] ":"")+"制作收集晶体游戏");
-    await page.getByRole("button",{name:"开始创建",exact:true}).click();
-    await expect(page.getByRole("button",{name:"查看版本 v1 预览",exact:true})).toBeVisible();
-    const path=(await page.getByRole("link",{name:"导出源码"}).getAttribute("href"))!;
-    const version=await (await page.request.get(path.replace(/\/export$/,""))).json();
-    const run=await (await page.request.get("/api/v1/runs/"+version.source_run_id)).json();
-    expect(run).toMatchObject({status:"succeeded",model_calls:4});
-    expect(version.validation_report.quality_repair).toBe(repeat?"kept_runnable_candidate":"candidate_rechecked");
-    expect(version.artifact.files["src/App.tsx"].includes("const coreScore = 0;")).toBe(repeat);
-  });
-}
-
 test("可操作的回合制游戏无需按指定路线通关即可交付", async ({page})=>{
   await page.goto("/games");
   await page.getByLabel("描述应用需求").fill("[game-replay-repair] 制作一个收集三颗晶体的回合制游戏");
@@ -63,8 +69,8 @@ test("可操作的回合制游戏无需按指定路线通关即可交付", async
   const path=(await page.getByRole("link",{name:"导出源码"}).getAttribute("href"))!;
   const version=await (await page.request.get(path.replace(/\/export$/,""))).json();
   const run=await (await page.request.get("/api/v1/runs/"+version.source_run_id)).json();
-  expect(run.model_calls).toBe(3);
-  expect(version.validation_report.acceptance).toBe("smoke");
+  expect(run.model_calls).toBe(2);
+  expect(version.validation_report.acceptance).toBe("startup");
   expect(JSON.parse(version.artifact.files["src/game/design.json"]).playtest.actions).toEqual(["collect","collect"]);
 });
 
@@ -76,8 +82,8 @@ test("游戏可操作时，缺少特定控件标记不会触发修复", async ({
   const path=(await page.getByRole("link",{name:"导出源码"}).getAttribute("href"))!;
   const version=await (await page.request.get(path.replace(/\/export$/,""))).json();
   const run=await (await page.request.get("/api/v1/runs/"+version.source_run_id)).json();
-  expect(run).toMatchObject({status:"succeeded",model_calls:3,retry_of_run_id:null});
-  expect(version.validation_report.acceptance).toBe("smoke");
+  expect(run).toMatchObject({status:"succeeded",model_calls:2,retry_of_run_id:null});
+  expect(version.validation_report.acceptance).toBe("startup");
   await expect(page.getByTestId("build-failure")).toHaveCount(0);
   const preview=page.frameLocator('iframe[title="应用预览"]');
   await preview.getByRole("button",{name:"开始游戏"}).click();
@@ -95,8 +101,8 @@ test("短测无需方向或玩法断言", async ({page})=>{
   const path=(await page.getByRole("link",{name:"导出源码"}).getAttribute("href"))!;
   const version=await (await page.request.get(path.replace(/\/export$/,""))).json();
   const run=await (await page.request.get("/api/v1/runs/"+version.source_run_id)).json();
-  expect(run.model_calls).toBe(3);
-  expect(version.validation_report.acceptance).toBe("smoke");
+  expect(run.model_calls).toBe(2);
+  expect(version.validation_report.acceptance).toBe("startup");
 });
 
 test("轨道解谜可完成三关，飞行示例可操作、收集与暂停", async ({page,browser,baseURL})=>{

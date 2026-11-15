@@ -7,16 +7,16 @@ import pytest
 from atoms.config import settings
 from atoms.game_benchmarks import match_genre
 from atoms.game_profiles import game_profile
-from atoms.orchestration import PLAN_FILE, TaskPlan, TaskReview, enforce_plan, parse_decision, requests_fps
+from atoms.orchestration import PLAN_FILE, TaskPlan, enforce_plan, parse_plan, plan_contract, requests_fps
 from atoms import worker
-from atoms.worker import agent_decision as real_agent_decision
+from atoms.worker import agent_plan as real_agent_plan
 from conftest import create_project, submit
 
 
 def plan():
     return TaskPlan(experience="other_game",rendering="canvas2d",
         requirements=["可点击目标","显示分数"],visual_direction="有主次的布局",
-        specialist_brief="实现射击游戏",acceptance=["启动","操作"])
+        specialist_brief="实现射击游戏")
 
 
 def test_fps_expectations_survive_a_planner_downgrade():
@@ -78,7 +78,7 @@ def test_structured_planning_fields_preserve_their_content():
     value=plan().model_dump()
     value.update(requirements={"视角":"第一人称","输入":["WASD","鼠标拖动"]},
                  visual_direction={"场景":"港口仓库","光照":"清晰日光"})
-    result=parse_decision("planner",value)
+    result=parse_plan(value)
     assert result.requirements[0]=="视角 第一人称"
     assert "WASD" in result.requirements[1]
     assert "清晰日光" in result.visual_direction
@@ -89,10 +89,6 @@ def test_optional_planner_ideas_do_not_become_blocking_fps_requirements():
     resolved=enforce_plan(proposed,{"project_kind":"game","request":"生成一个FPS枪战游戏"})
     assert "重生系统" in resolved.enhancements
     assert "重生系统" not in resolved.requirements
-    review=parse_decision("reviewer",{
-        "accepted":True,"findings":[],"suggestions":["可以增加右键瞄准"],
-    })
-    assert review.accepted and not review.findings
 
 
 def test_default_2d_game_repairs_a_candidate_using_threejs(client, monkeypatch):
@@ -140,12 +136,85 @@ def test_game_profiles_cover_genre_families_and_fallback():
     ("生成一个雪人兄弟游戏","arcade_platformer"),
     ("做一个 Snow Bros. 风格的横版平台跳跃游戏","arcade_platformer"),
     ("做一个像马里奥的横版跳跃游戏","platformer"),
+    ("生成一个真正可玩的2048网页游戏","tile_merge"),
+    ("做个２０４８，棋盘改成 5×5","tile_merge"),
+    ("生成一个支持2048×1024分辨率的赛车游戏","racing"),
+    ("不要做2048，做一个赛车游戏","racing"),
+    ("不要做2048或三消，做平台跳跃","platformer"),
+    ("Do not make 2048. Make a racing game.","racing"),
+    ("不要赛车，做一款2048网页游戏","tile_merge"),
+    ("做一个积分上限2048分的三消游戏","match3"),
     ("做一个用连锁消除过关的三消解谜游戏","match3"),
     ("做个像植物大战僵尸的策略游戏","tower_defense"),
     ("做一个结合三消和塔防的游戏",None),
 ])
 def test_specific_mechanics_route_before_broad_genre(request_text,genre):
     assert match_genre(request_text)==genre
+
+
+def test_excluded_genre_is_not_restored_from_the_plan_or_base():
+    context={"project_kind":"game","request":"别做 2048，换个玩法","base_game_genre":"tile_merge"}
+    proposed=plan().model_copy(update={"game_genre":"tile_merge"})
+    assert enforce_plan(proposed,context).game_genre=="other"
+    context["request"]="不要做2048，做一个赛车游戏"
+    assert enforce_plan(proposed,context).game_genre=="racing"
+
+
+def test_mechanics_is_required_in_new_game_plan_and_optional_in_saved_plan():
+    original=plan().model_dump()
+    assert TaskPlan.model_validate(original).mechanics is None
+    context={"project_kind":"game","request":"生成一个2048游戏"}
+    assert "mechanics" in plan_contract(context).model_json_schema()["required"]
+    with pytest.raises(ValueError, match="mechanics"):
+        parse_plan(original,context=context)
+    assert parse_plan(original,context={"project_kind":"web"}).mechanics is None
+
+
+@pytest.mark.parametrize(("request_text","genre","reference_example","expected_text"),[
+    ("生成一个真正可玩的2048网页游戏","tile_merge","向右","[0,0,0,4]"),
+    ("做一个平台跳跃游戏","platformer","首跳路线","第一处平台实际顶面"),
+])
+def test_mechanics_reaches_planning_generation_repair_and_saved_version(
+    client,monkeypatch,request_text,genre,reference_example,expected_text,
+):
+    from atoms import model_fixture
+    from atoms.model import prepare_plan
+    from atoms.prompts import messages_for
+    from test_retry import validator
+    from test_workflow import VALIDATION
+
+    project=client.post("/api/v1/projects",json={"client_key":"mechanics-test","title":"玩法测试","kind":"game"}).json()
+    assert submit(client,project["id"],request_text).status_code==202
+    run=worker.claim("test-leader")
+    generated=[]
+
+    async def build_plan(run,context):
+        assert context["game_genre_hint"]==genre
+        prepared=await prepare_plan(context)
+        assert reference_example in prepared.messages[0]["content"]
+        assert "mechanics" in prepared.response_schema["required"]
+        return parse_plan(json.loads(model_fixture.test_plan(context)),context=context)
+
+    async def generate(run,context,repair,*,skill):
+        system,user,*_=messages_for(context,repair,skill=skill)
+        mechanics=json.loads(user["content"])["task_plan"]["mechanics"]
+        assert reference_example in system["content"]
+        assert "先按 examples 核对规则结果" in system["content"]
+        assert expected_text in mechanics["examples"][0]["expected"]
+        assert bool(repair)==bool(generated)
+        generated.append(mechanics)
+        return model_fixture.test_artifact(context,repair)
+
+    monkeypatch.setattr(worker,"agent_plan",build_plan)
+    monkeypatch.setattr(worker,"paid_generate",generate)
+    validator(monkeypatch,[{"ok":False,"error":"模拟启动故障","diagnostic":{"code":"PREVIEW_RUNTIME_ERROR"}},VALIDATION])
+    asyncio.run(worker.execute_run(run))
+    result=client.get("/api/v1/runs/"+run["id"]).json()
+    assert result["status"]=="succeeded" and len(generated)==2
+    version=client.get("/api/v1/projects/"+project["id"]+"/versions/"+result["result_version_id"]).json()
+    assert generated[0]==generated[1]
+    assert json.loads(version["artifact"]["files"][PLAN_FILE])["mechanics"]==generated[0]
+    assert version["validation_report"]["task_plan"]["mechanics"]==generated[0]
 
 
 @pytest.mark.parametrize(("request_text","genre","reference"),[
@@ -173,12 +242,7 @@ def test_game_research_and_template_reach_the_generation_pipeline(client, monkey
         calls.append("research")
         return research
 
-    async def decision(run, role, context):
-        if role=="reviewer":
-            assert context["task_plan"]["game_genre"] == genre
-            assert context["game_profile"] == game_profile(genre)
-            return TaskReview(accepted=True,findings=[])
-        assert role=="planner"
+    async def build_plan(run, context):
         assert calls == ["research"]
         assert context["game_dimension"] == "2d"
         assert context["game_research"] == research
@@ -200,7 +264,7 @@ def test_game_research_and_template_reach_the_generation_pipeline(client, monkey
             assert "game_reference" not in context
         return model_fixture.test_artifact(context, repair)
 
-    monkeypatch.setattr(worker, "agent_decision", decision)
+    monkeypatch.setattr(worker, "agent_plan", build_plan)
     monkeypatch.setattr(worker, "paid_generate", generate)
     monkeypatch.setattr(worker, "find_game_references", search)
     validator(monkeypatch, [VALIDATION])
@@ -225,12 +289,12 @@ def test_saved_plan_survives_recheck_failure_and_runtime_repair(client,monkeypat
     assert retry(client,project,source).status_code==202
     run=worker.claim("test-leader")
     async def generated(prepared,output_limit,**kwargs):
-        assert prepared.decision_role is None
+        assert prepared.response_schema is None
         context=json.loads(prepared.messages[1]["content"])
         assert context["task_plan"]["experience"]=="website"
         return ModelResult(compact(artifact),Usage(1200,400,"test-recovery"))
 
-    monkeypatch.setattr(worker,"agent_decision",real_agent_decision)
+    monkeypatch.setattr(worker,"agent_plan",real_agent_plan)
     monkeypatch.setattr(worker,"generate",generated)
     validator(monkeypatch,[{"ok":False,"error":"需要修复"},VALIDATION])
     asyncio.run(worker.execute_run(run))
@@ -242,25 +306,22 @@ def test_saved_plan_survives_recheck_failure_and_runtime_repair(client,monkeypat
         assert one(conn,"SELECT held_units FROM credit_wallets")["held_units"]==0
 
 
-def test_planner_and_review_calls_are_separately_accounted(client,monkeypatch):
+def test_planner_call_is_accounted(client,monkeypatch):
     project=create_project(client)
     assert submit(client,project["id"]).status_code==202
     run=worker.claim("test-leader")
     config=settings()
     monkeypatch.setattr(config,"test_fixture",False)
-    monkeypatch.setattr(worker,"agent_decision",real_agent_decision)
+    monkeypatch.setattr(worker,"agent_plan",real_agent_plan)
     original=httpx.AsyncClient
-    results=iter([plan().model_dump(),{"accepted":False,"findings":[{"path":"src/App.tsx","excerpt":"const camera = null","problem":"按方向键无法移动镜头"}]}])
     def handle(request):
         if request.method=="GET":
             return httpx.Response(200,json={"max_output_tokens":4096})
-        content=json.dumps(next(results),ensure_ascii=False)
+        content=json.dumps(plan().model_dump(),ensure_ascii=False)
         return httpx.Response(200,json={"content":content,"usage":{"input_tokens":300,"output_tokens":120}})
     monkeypatch.setattr(httpx,"AsyncClient",lambda **kwargs:original(**{**kwargs, 'transport':httpx.MockTransport(handle)}))
-    first=asyncio.run(real_agent_decision(run,"planner",{"request":"做一个游戏"}))
-    last=asyncio.run(real_agent_decision(run,"reviewer",{"request":"做一个游戏","artifact":{}}))
-    assert first.rendering=="canvas2d"
-    assert not last.accepted
-    assert client.get("/api/v1/runs/"+run["id"]).json()["model_calls"]==2
+    result=asyncio.run(real_agent_plan(run,{"request":"做一个游戏"}))
+    assert result.rendering=="canvas2d"
+    assert client.get("/api/v1/runs/"+run["id"]).json()["model_calls"]==1
     wallet=client.get("/api/v1/wallet").json()
-    assert wallet["held"]=="0.000000" and wallet["spent"]=="0.031200"
+    assert wallet["held"]=="0.000000" and wallet["spent"]=="0.015600"

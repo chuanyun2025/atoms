@@ -58,6 +58,25 @@ async def read_input(request: Request, schema, limit: int):
         raise ModelError("PROVIDER_INVALID_REQUEST","网关请求格式无效") from None
 
 
+async def complete_until_disconnect(request, call):
+    async def wait_for_disconnect():
+        while (await request.receive())["type"] != "http.disconnect":
+            pass
+
+    completion = asyncio.create_task(call())
+    connection = asyncio.create_task(wait_for_disconnect())
+    try:
+        done,_=await asyncio.wait((completion,connection),return_when=asyncio.FIRST_COMPLETED)
+        if completion in done:
+            return await completion
+        raise ModelError("CALL_INTERRUPTED","模型请求已停止，未确认的积分预授权待核对",uncertain=True)
+    finally:
+        for task in (completion,connection):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(completion,connection,return_exceptions=True)
+
+
 def create_app(config=None, *, transport=None):
     @asynccontextmanager
     async def lifespan(app):
@@ -172,7 +191,7 @@ def create_app(config=None, *, transport=None):
             except TimeoutError:
                 raise ModelError("MODEL_TIMEOUT","模型请求超时，未确认的积分预授权待核对",uncertain=True) from None
             return asdict(result)
-        return await invoke(request,"text.generate",call)
+        return await invoke(request,"text.generate",lambda:complete_until_disconnect(request,call))
 
     @app.post("/internal/v1/video/tasks",dependencies=private)
     async def submit_video(request: Request):

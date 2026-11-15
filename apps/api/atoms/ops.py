@@ -12,6 +12,9 @@ from sqlalchemy.engine import make_url
 from .config import settings
 from .db import transaction,execute,one,engine
 from .media import asset_path
+from .security_ids import uid
+
+DISPATCH_SCHEMA = "0011_model_call_dispatch"
 
 
 def database_path():
@@ -25,7 +28,7 @@ def inspect_backup(path,media_directory=None):
         if source.execute("PRAGMA integrity_check").fetchone()[0]!="ok":
             raise ValueError("备份完整性检查失败")
         version=source.execute("SELECT version_num FROM alembic_version").fetchone()[0]
-        if version not in {"0007","0008","0009","0009_publish","0010"}:
+        if version not in {"0007","0008","0009","0009_publish","0010",DISPATCH_SCHEMA}:
             raise ValueError("备份数据库版本不受当前程序支持，请先核对对应代码版本")
         projects=source.execute("SELECT count(*) FROM projects").fetchone()[0]
         source.row_factory=sqlite3.Row
@@ -131,8 +134,18 @@ def main():
         target.execute("UPDATE worker_status SET lease_token=NULL,lease_until=0,heartbeat_at=0,state='offline',model_configured=0")
         if report["schema"] != "0007":
             target.execute("UPDATE worker_status SET video_configured=0,text_model=NULL")
-        if report["schema"] in {"0009","0010"}:
+        if report["schema"] in {"0009","0010",DISPATCH_SCHEMA}:
             target.execute("UPDATE run_workspace SET compiled_json=NULL,digest=NULL")
+        if report["schema"]==DISPATCH_SCHEMA:
+            now=time.time()
+            pending=target.execute("""SELECT id,visitor_id,run_id,reserved_units FROM model_calls
+                WHERE status='in_flight' AND dispatch_pending=1""").fetchall()
+            for call_id,owner,run_id,held in pending:
+                target.execute("UPDATE credit_wallets SET held_units=held_units-?,updated_at=? WHERE visitor_id=?",(held,now,owner))
+                target.execute("""INSERT INTO credit_ledger(id,visitor_id,event_key,kind,amount_units,run_id,call_id,created_at)
+                    VALUES(?,?,?,'release',0,?,?,?)""",(uid(),owner,"release:"+call_id,run_id,call_id,now))
+            target.execute("""UPDATE model_calls SET status='released',dispatch_pending=0,error_code='RESTORED_UNSENT',settled_at=?
+                WHERE status='in_flight' AND dispatch_pending=1""",(now,))
         target.execute("UPDATE model_calls SET status='uncertain',error_code='RESTORED_WITHOUT_USAGE' WHERE status='in_flight'")
         target.execute("UPDATE media_calls SET status='uncertain',error_code='RESTORED_WITHOUT_USAGE' WHERE status='in_flight'")
         target.execute("INSERT INTO system_settings(key,value) VALUES('maintenance','true') ON CONFLICT(key) DO UPDATE SET value='true'")

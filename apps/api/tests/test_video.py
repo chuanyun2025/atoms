@@ -146,14 +146,19 @@ def test_media_downloader_blocks_private_network_addresses():
 def test_backup_and_offline_restore_include_native_media(client,monkeypatch,tmp_path):
     import sys
     from atoms import ops
+    from atoms.credits import reserve_call
     from atoms.media import asset_path
+    from conftest import create_project,submit
     project,image=project_and_image(client)
     assert start(client,project,image).status_code==202
     asyncio.run(worker.execute_run(worker.claim("test-leader")))
+    text_project=create_project(client)
+    assert submit(client,text_project["id"]).status_code==202
+    call=reserve_call(worker.claim("test-leader"),1,1000,3000)
     backup=tmp_path/"video-backup.db"
     monkeypatch.setattr(sys,"argv",["ops","backup",str(backup)])
     ops.main()
-    assert ops.inspect_backup(backup)["schema"]=="0010"
+    assert ops.inspect_backup(backup)["schema"]==ops.DISPATCH_SCHEMA
     with transaction(True) as conn:
         asset=one(conn,"SELECT * FROM media_assets WHERE project_id=:pid AND mime_type='video/mp4'",pid=project["id"])
         execute(conn,"UPDATE worker_status SET lease_until=0")
@@ -163,3 +168,6 @@ def test_backup_and_offline_restore_include_native_media(client,monkeypatch,tmp_
     monkeypatch.setattr(sys,"argv",["ops","restore",str(backup),"--offline","--confirm-restore"])
     ops.main()
     assert target.read_bytes()==original
+    with transaction() as conn:
+        assert one(conn,"SELECT status FROM model_calls WHERE id=:id",id=call["id"])["status"]=="released"
+        assert one(conn,"SELECT held_units FROM credit_wallets WHERE visitor_id=:id",id=call["visitor_id"])["held_units"]==0

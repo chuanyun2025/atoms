@@ -14,7 +14,6 @@ from .provider_client import ProviderClient
 PLANNING_TIMEOUT = 45
 GENERATION_TIMEOUT = 180
 COMPLEX_GENERATION_TIMEOUT = 420
-REVIEW_TIMEOUT = 20
 
 @dataclass(frozen=True)
 class Prepared:
@@ -23,7 +22,6 @@ class Prepared:
     output_limit: int
     slide_content: bool = False
     react_site: bool = False
-    decision_role: str | None = None
     response_schema: dict | None = None
     timeout_seconds: int = GENERATION_TIMEOUT
 
@@ -46,14 +44,13 @@ async def prepare(context, repair, *, skill: GenerationSkill):
                     slide_content=bool(context.get("slide_template")),react_site=context.get("site_format")=="react",
                     timeout_seconds=COMPLEX_GENERATION_TIMEOUT if complex_build else GENERATION_TIMEOUT)
 
-async def prepare_decision(role: str, context: dict):
-    from .orchestration import TaskPlan, TaskReview, decision_messages
+async def prepare_plan(context: dict):
+    from .orchestration import plan_contract, plan_messages
 
-    messages=decision_messages(role,context)
-    schema=(TaskPlan if role=="planner" else TaskReview).model_json_schema()
+    messages=plan_messages(context)
     return Prepared(messages,len(compact(messages).encode("utf-8"))+1024,
-                    min(4096,await native_output_limit()),decision_role=role,response_schema=schema,
-                    timeout_seconds=PLANNING_TIMEOUT if role=="planner" else REVIEW_TIMEOUT)
+                    min(4096,await native_output_limit()),response_schema=plan_contract(context).model_json_schema(),
+                    timeout_seconds=PLANNING_TIMEOUT)
 
 
 async def generate(prepared,output_tokens, *, run_id=None):
@@ -63,16 +60,15 @@ async def generate(prepared,output_tokens, *, run_id=None):
 
         context=json.loads(prepared.messages[1]["content"])
         repair=json.loads(prepared.messages[2]["content"].split("\n",1)[1]) if len(prepared.messages)>2 else None
-        slow_review=prepared.decision_role=="reviewer" and "[slow-review]" in context["request"]
-        await asyncio.sleep(8 if "[slow]" in context["request"] or slow_review else .25)
-        if prepared.decision_role:
-            from .model_fixture import test_decision
-            raw=test_decision(prepared.decision_role,context)
+        await asyncio.sleep(8 if "[slow]" in context["request"] or ("[slow-build]" in context["request"] and not prepared.response_schema) else .25)
+        if prepared.response_schema:
+            from .model_fixture import test_plan
+            raw=test_plan(context)
         else:
             raw=test_artifact(context,repair)
         return ModelResult(raw,Usage(1200,400,"fixture-"+str(time.time_ns())))
     if prepared.response_schema:
-        name, schema = prepared.decision_role, prepared.response_schema
+        name, schema = "planner", prepared.response_schema
     elif prepared.slide_content:
         name, schema = "slide_content", DeckContent.model_json_schema()
     else:

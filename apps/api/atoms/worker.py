@@ -5,36 +5,35 @@ import re
 import signal
 import time
 from contextlib import nullcontext
-from hashlib import sha256
 import httpx
 from .config import settings
 from .db import transaction,execute,one,all_rows,compact,add_event,maintenance
 from .security import uid
-from .service import announce_version,write_version
+from .service import USER_STOPPED,announce_version,write_version
 from .validator_client import validate_artifact
 from .artifacts import normalize_artifact,strict_json
+from .build_diagnostics import BuildIssue, MODEL_OUTPUT_ERRORS, REPAIR_POLICIES
 from .exchange_rates import RATES_FILE, reference_rates, wants_exchange_rates
 from .editorial_feed import NEWS_FILE, editorial_snapshot, has_editorial_snapshot, wants_editorial_feed
 from .website_starters import MEDIA_FILE, match_website_starter
-from .model import generate,prepare,prepare_decision,ModelError
+from .model import generate,prepare,prepare_plan,ModelError
 from .provider_client import ProviderClient
-from .orchestration import FPS_COVER_FILE, PLAN_FILE, TaskPlan, enforce_plan, game_dimension, game_reference, has_threejs, parse_decision, requests_fps
+from .orchestration import FPS_COVER_FILE, PLAN_FILE, TaskPlan, enforce_plan, game_dimension, game_reference, has_threejs, parse_plan, requests_fps
 from .skills import skill_for
 from .game_scenes import scene_direction
-from .game_benchmarks import BENCHMARKS, match_genre
+from .game_benchmarks import BENCHMARKS, genre_preferences, match_genre
 from .game_profiles import game_profile
 from .game_research import RESEARCH_FILE, find_game_references
 from .slide_templates import slide_template_reference
 from .slide_decks import render_slide_deck
-from .credits import reserve_call,settle_call,finish_unbilled,mark_run_uncertain,CreditError
+from .credits import reserve_call,start_call,settle_call,finish_unbilled,finish_model_calls,CreditError
 
 log=logging.getLogger("atoms.worker")
-MAX_REPAIR_ROUNDS = 3
+MAX_REPAIR_ROUNDS = 10
 MAX_DECISION_ATTEMPTS = 3
 VALIDATOR_RETRY_DELAYS = (1, 3, 8)
-GAME_REVIEW_TIMEOUT = 25
-GAME_REVIEW_SOURCE_LIMIT = 100_000
-QUALITY_REPAIR_TIMEOUT = 120
+MODEL_RETRY_DELAYS = (2, 5)
+RETRYABLE_MODEL_SERVICE_ERRORS = {"MODEL_CONNECTION","MODEL_RATE_LIMIT","PROVIDER_RATE_LIMIT"}
 
 
 class LeaseLost(Exception):
@@ -45,7 +44,7 @@ def fail_locked(conn,run,status,code,message):
     if run["status"] not in {"pending","running"}:
         return
     now=time.time()
-    mark_run_uncertain(conn,run["id"],code)
+    finish_model_calls(conn,run["id"],code)
     from .media_credits import finish_run
     finish_run(conn,run["id"],code)
     execute(conn,"UPDATE runs SET status=:status,stage=:status,error_code=:code,error_message=:message,finished_at=:now,lease_until=NULL WHERE id=:id",
@@ -55,7 +54,8 @@ def fail_locked(conn,run,status,code,message):
     execute(conn,"INSERT INTO messages(id,project_id,run_id,role,content,created_at) VALUES(:id,:pid,:rid,'assistant',:message,:now)",
             id=uid(),pid=run["project_id"],rid=run["id"],message=message[:1200],now=now)
     add_event(conn,run["id"],status,{"code":code,"message":message[:1200]})
-    execute(conn,"UPDATE run_workspace SET compiled_json=NULL,digest=NULL WHERE run_id=:id",id=run["id"])
+    if code!=USER_STOPPED:
+        execute(conn,"UPDATE run_workspace SET compiled_json=NULL,digest=NULL WHERE run_id=:id",id=run["id"])
 
 
 def recover_expired():
@@ -127,6 +127,13 @@ def claim(token):
         return one(conn,"SELECT * FROM runs WHERE id=:id",id=row["id"])
 
 
+def user_stopped_runs(run_ids):
+    with transaction() as conn:
+        rows=all_rows(conn,"""SELECT id FROM runs WHERE status='interrupted' AND error_code=:code
+            AND id IN (SELECT value FROM json_each(:ids))""",code=USER_STOPPED,ids=compact(run_ids))
+    return {row["id"] for row in rows}
+
+
 def stage(rid,token,name,message,**details):
     with transaction(True) as conn:
         run=one(conn,"SELECT * FROM runs WHERE id=:id",id=rid)
@@ -142,16 +149,23 @@ def read_context(run):
         if run["base_version_id"]:
             version=one(conn,"SELECT a.raw_json FROM versions v JOIN artifacts a ON v.artifact_id=a.id WHERE v.id=:id",id=run["base_version_id"])
             base=json.loads(version["raw_json"])
+            if plan_source:=base.get("files",{}).get(PLAN_FILE):
+                try:
+                    base["files"][PLAN_FILE]=TaskPlan.model_validate_json(plan_source).model_dump_json()
+                except (TypeError,ValueError):
+                    pass
         messages=all_rows(conn,"SELECT role,content FROM messages WHERE project_id=:id AND run_id!=:rid ORDER BY created_at DESC LIMIT 6",id=run["project_id"],rid=run["id"])
         resume=None
         if run.get("retry_of_run_id"):
-            source=one(conn,"""SELECT r.error_message,c.raw_content,c.diagnostics,c.attempt
+            source=one(conn,"""SELECT r.error_message,c.raw_content,c.diagnostics,c.attempt,w.source_json
                 FROM runs r LEFT JOIN run_candidates c ON c.run_id=r.id
+                LEFT JOIN run_workspace w ON w.run_id=r.id
                 WHERE r.id=:id AND r.project_id=:pid AND r.owner_id=:owner""",
                 id=run["retry_of_run_id"],pid=run["project_id"],owner=run["owner_id"])
             if source:
                 resume={"candidate":source["raw_content"],"diagnostics":source["diagnostics"] or source["error_message"] or "上次构建未完成",
-                        "attempt":source["attempt"] or 0}
+                        "attempt":source["attempt"] or 0,
+                        "plan_source":json.loads(source["source_json"] or "{}").get("files",{}).get(PLAN_FILE)}
     context = {"project_title":project["title"],"project_kind":project["kind"],"request":run["prompt"],
                "base_artifact":base,"recent_messages":list(reversed(messages)),
                "continuing_failed_build":bool(run.get("retry_of_run_id")),"_resume":resume}
@@ -190,7 +204,6 @@ def publish_source(run, artifact):
 def publish_preview(run, compiled):
     with transaction(True) as conn:
         guard(one(conn,"SELECT * FROM runs WHERE id=:id",id=run["id"]),run["lease_token"])
-        # Keep the first runnable preview stable while the worker reviews or refines the build.
         changed = execute(conn,"""UPDATE run_workspace SET compiled_json=:compiled,digest=:digest
             WHERE run_id=:id AND digest IS NULL""",id=run["id"],compiled=compact(compiled),digest=compiled["digest"])
         if changed.rowcount:
@@ -232,12 +245,30 @@ def next_call_attempt(run):
         return one(conn,"SELECT COALESCE(MAX(attempt),0)+1 n FROM model_calls WHERE run_id=:id",id=run["id"])["n"]
 
 
-async def agent_decision(run,role,context):
-    for _ in range(1 if role == "reviewer" else MAX_DECISION_ATTEMPTS):
-        prepared=await prepare_decision(role,context)
+async def retry_model_service(run, operation, phase, message, **details):
+    rid,token=run["id"],run["lease_token"]
+    for delay in MODEL_RETRY_DELAYS:
         try:
-            raw=await paid_request(run,await asyncio.to_thread(next_call_attempt,run),prepared)
-            return parse_decision(role,strict_json(raw))
+            return await operation()
+        except ModelError as error:
+            if error.uncertain or error.usage or error.code not in RETRYABLE_MODEL_SERVICE_ERRORS:
+                raise
+            wait_message="模型连接暂不可用，等待重试" if error.code=="MODEL_CONNECTION" else "模型服务限流，等待重试"
+            await asyncio.to_thread(stage,rid,token,"model_wait",wait_message,code=error.code)
+            await asyncio.sleep(delay)
+            await asyncio.to_thread(stage,rid,token,phase,message,**details)
+    return await operation()
+
+
+async def agent_plan(run,context):
+    async def request():
+        prepared=await prepare_plan(context)
+        return await paid_request(run,await asyncio.to_thread(next_call_attempt,run),prepared)
+
+    for _ in range(MAX_DECISION_ATTEMPTS):
+        try:
+            raw=await retry_model_service(run,request,"planning","主 Agent 解析目标并规划实现")
+            return parse_plan(strict_json(raw),context=context)
         except ValueError as error:
             feedback="上一轮的决策 JSON 不符合约定。按给定结构修正后重新提交。"+str(error)[:500]
         except ModelError as error:
@@ -245,22 +276,24 @@ async def agent_decision(run,role,context):
                 raise
             feedback=str(error)
         context={**context,"decision_feedback":feedback}
-    raise ModelError("AGENT_RESPONSE_INVALID","规划或审核服务未返回可用的决策")
+    raise ModelError("AGENT_RESPONSE_INVALID","规划服务未返回可用的实现计划")
 
 
 def recoverable_model_output(error):
-    return not error.uncertain and error.code in {"MODEL_EMPTY","MODEL_TRUNCATED","MODEL_PROTOCOL"}
+    return not error.uncertain and error.code in MODEL_OUTPUT_ERRORS
 
 
 async def paid_request(run,attempt,prepared):
     call=await asyncio.to_thread(reserve_call,run,attempt,prepared.input_ceiling,prepared.output_limit)
+    # Authorize dispatch against the run's live state before yielding to the model request.
+    start_call(call)
     try:
         result=await generate(prepared,call["output_limit"],run_id=run["id"])
     except ModelError as e:
         if e.usage:
-            await asyncio.to_thread(settle_call,call,e.usage.input_tokens,e.usage.output_tokens,e.usage.request_id)
+            await asyncio.shield(asyncio.to_thread(settle_call,call,e.usage.input_tokens,e.usage.output_tokens,e.usage.request_id))
         else:
-            await asyncio.to_thread(finish_unbilled,call,e.code,e.uncertain)
+            await asyncio.shield(asyncio.to_thread(finish_unbilled,call,e.code,e.uncertain))
         raise
     except asyncio.CancelledError:
         await asyncio.shield(asyncio.to_thread(finish_unbilled,call,"CALL_INTERRUPTED",True))
@@ -268,7 +301,7 @@ async def paid_request(run,attempt,prepared):
     except Exception:
         await asyncio.to_thread(finish_unbilled,call,"CALL_UNKNOWN",True)
         raise
-    await asyncio.to_thread(settle_call,call,result.usage.input_tokens,result.usage.output_tokens,result.usage.request_id)
+    await asyncio.shield(asyncio.to_thread(settle_call,call,result.usage.input_tokens,result.usage.output_tokens,result.usage.request_id))
     return result.content
 
 
@@ -280,23 +313,31 @@ def recent_game_scenes(run):
     return [json.loads(row["raw_json"])["files"] for row in rows]
 
 
-async def validate_candidate(run,raw,attempt,*,slide_template=None,react=False,site_files=None,website_starter=None,preview_kind="web",required_game_dimension=None,retain=True,validator_slot=None):
+async def validate_candidate(run,raw,attempt,*,slide_template=None,react=False,site_files=None,website_starter=None,preview_kind="web",required_game_dimension=None,validator_slot=None):
     rid,token=run["id"],run["lease_token"]
     if len(raw.encode())>32*1024*1024:
-        raise ValueError("代码超过传输资源保护")
+        raise BuildIssue("ARTIFACT_LIMIT","代码超过传输资源保护")
     # Save before parsing or starting a browser so failure/restart retains the work.
-    if retain:
-        await asyncio.to_thread(keep_candidate,run,raw,"",attempt)
+    await asyncio.to_thread(keep_candidate,run,raw,"",attempt)
     message = "重新检查保留的代码，不重复生成" if attempt==0 else "检查 JSON 格式和产物契约"
     await asyncio.to_thread(stage,rid,token,"validating",message)
     try:
-        artifact=strict_json(raw)
+        try:
+            artifact=strict_json(raw)
+        except ValueError as error:
+            raise BuildIssue("ARTIFACT_JSON_INVALID",str(error),subject=getattr(error,"msg",None)) from None
         if not isinstance(artifact,dict):
-            raise ValueError("产物必须是完整 JSON 对象")
+            raise BuildIssue("ARTIFACT_SCHEMA_INVALID","产物必须是完整 JSON 对象")
         rendered_deck=bool(slide_template and (attempt>0 or "slides" in artifact))
-        artifact=render_slide_deck(artifact,slide_template) if rendered_deck else normalize_artifact(artifact)
+        if rendered_deck:
+            try:
+                artifact=render_slide_deck(artifact,slide_template)
+            except ValueError as error:
+                raise BuildIssue("ARTIFACT_SCHEMA_INVALID",str(error)) from None
+        else:
+            artifact=normalize_artifact(artifact)
         if react and (attempt>0 or website_starter) and artifact.get("schema_version")=="1":
-            raise ValueError("此项目需要 schema_version 2 和 React TSX 源码")
+            raise BuildIssue("ARTIFACT_SCHEMA_INVALID","此项目需要 schema_version 2 和 React TSX 源码")
         files=artifact.get("files")
         if artifact.get("schema_version")=="2" and isinstance(files,dict):
             # Platform data overrides model output at these known paths.
@@ -311,36 +352,39 @@ async def validate_candidate(run,raw,attempt,*,slide_template=None,react=False,s
         await asyncio.to_thread(publish_source,run,artifact)
         lightweight_3d=game and has_threejs(artifact)
         if required_game_dimension=="2d" and lightweight_3d:
-            raise ValueError("本次游戏需要 2D 渲染。请用 DOM 或 Canvas 2D 实现并移除 Three.js 引用")
+            raise BuildIssue("ARTIFACT_REQUIREMENT","本次游戏需要 2D 渲染。请用 DOM 或 Canvas 2D 实现并移除 Three.js 引用")
         async with validator_slot if validator_slot is not None else nullcontext():
-            await asyncio.to_thread(stage,rid,token,"browser_check","检查预览和主要操作")
+            await asyncio.to_thread(stage,rid,token,"browser_check","检查预览能否启动")
             validation=await validate_artifact(artifact,rid,preview_kind,lightweight_3d)
         if not validation.get("ok"):
-            diagnostic=validation.get("error","产物未通过检查")
+            issue=BuildIssue.from_validator(validation)
             # During a rolling update an older validator still returns these service errors as 200.
-            if diagnostic in {"浏览器效果验收超时", "隔离浏览器进程未正常完成", "隔离浏览器无法启动，请检查 Chromium 系统沙箱配置"}:
-                if retain:
-                    await asyncio.to_thread(keep_candidate,run,raw,diagnostic,attempt)
+            if str(issue) in {"浏览器效果验收超时", "隔离浏览器进程未正常完成", "隔离浏览器无法启动，请检查 Chromium 系统沙箱配置"}:
+                await asyncio.to_thread(keep_candidate,run,raw,str(issue),attempt)
                 raise ModelError("VALIDATOR_UNAVAILABLE","浏览器检查暂不可用，已保留本次代码")
-            raise ValueError(diagnostic)
-        if validation.get("report",{}).get("acceptance")!="smoke" or not validation["report"].get("ready"):
+            raise issue
+        report=validation.get("report")
+        compiled=validation.get("compiled")
+        if (not isinstance(report,dict) or report.get("acceptance")!="startup" or report.get("ready") is not True
+                or not isinstance(compiled,dict) or not isinstance(compiled.get("digest"),str)):
             raise ModelError("VALIDATOR_UNAVAILABLE","启动检查未完成，已保留本次代码")
-        await asyncio.to_thread(publish_preview,run,validation["compiled"])
+        await asyncio.to_thread(publish_preview,run,compiled)
         if rendered_deck:
             validation["report"]["slide_renderer"]="template-deck-v1"
         if website_starter:
             validation["report"]["website_starter"] = website_starter["id"]
         return artifact,validation
-    except (ValueError,TypeError,KeyError) as e:
-        diagnostics=str(e)[:2000]
-        if retain:
-            await asyncio.to_thread(keep_candidate,run,raw,diagnostics,attempt)
-        raise ValueError(diagnostics) from None
+    except BuildIssue as error:
+        await asyncio.to_thread(keep_candidate,run,raw,str(error),attempt)
+        raise
     except httpx.HTTPError as error:
+        if isinstance(error,httpx.HTTPStatusError) and error.response.status_code==413:
+            issue=BuildIssue("ARTIFACT_LIMIT","源码超过校验服务的大小限制")
+            await asyncio.to_thread(keep_candidate,run,raw,str(issue),attempt)
+            raise issue from None
         if isinstance(error,httpx.HTTPStatusError) and error.response.status_code < 500 and error.response.status_code != 429:
             raise ModelError("VALIDATOR_REJECTED","校验服务无法接受请求，已保留本次构建内容") from None
-        if retain:
-            await asyncio.to_thread(keep_candidate,run,raw,"独立校验服务暂不可用",attempt)
+        await asyncio.to_thread(keep_candidate,run,raw,"独立校验服务暂不可用",attempt)
         raise ModelError("VALIDATOR_UNAVAILABLE","独立校验服务暂不可用，请稍后继续；本次代码已保留") from None
 
 
@@ -351,7 +395,7 @@ async def validate_with_retry(run,raw,attempt,**options):
         except ModelError as error:
             if error.code!="VALIDATOR_UNAVAILABLE":
                 raise
-            await asyncio.to_thread(stage,run["id"],run["lease_token"],"validator_wait","等待校验服务恢复")
+            await asyncio.to_thread(stage,run["id"],run["lease_token"],"validator_wait","等待校验服务恢复，随后复查已有草稿",code=error.code)
             await asyncio.sleep(delay)
     return await validate_candidate(run,raw,attempt,**options)
 
@@ -359,40 +403,6 @@ async def validate_with_retry(run,raw,attempt,**options):
 async def deliver(run,artifact,validation):
     await asyncio.to_thread(stage,run["id"],run["lease_token"],"committing","保存代码快照和新版本")
     await asyncio.to_thread(commit,run,artifact,validation)
-
-
-async def review_game(run, context, artifact, smoke):
-    files = {path: source for path, source in artifact["files"].items()
-             if path.endswith((".html", ".js", ".ts", ".tsx", ".css"))}
-    if sum(len(source) for source in files.values()) > GAME_REVIEW_SOURCE_LIMIT:
-        return {"status":"unavailable","reason":"source_budget"}
-    try:
-        async with asyncio.timeout(GAME_REVIEW_TIMEOUT):
-            review = await agent_decision(run,"reviewer",{
-                "request":context["request"],
-                "task_plan":context.get("task_plan"),
-                "game_profile":context.get("game_profile"),
-                "browser_evidence":smoke,
-                "artifact":{"files":files},
-            })
-    except (TimeoutError, ModelError, CreditError) as error:
-        log.info("Game review unavailable for %s: %s",run["id"],getattr(error,"code",type(error).__name__))
-        return {"status":"unavailable"}
-    findings = [finding.model_dump() for finding in review.findings
-                if finding.path in files and finding.excerpt in files[finding.path]]
-    if not review.accepted and findings:
-        return {"status":"issue","findings":findings}
-    return {"status":"no_issue" if review.accepted and not review.findings else "unconfirmed"}
-
-
-def quality_feedback(report):
-    smoke = report.get("smoke",{})
-    if smoke.get("status") == "issue":
-        return smoke["diagnostic"]
-    return "\n".join(
-        f'{item["path"]}: {item["problem"]}\n相关源码: {item["excerpt"]}'
-        for item in report.get("source_review",{}).get("findings",[])
-    )
 
 
 async def execute_run(run, *, validator_slot=None):
@@ -443,13 +453,26 @@ async def execute_run(run, *, validator_slot=None):
     context["fps_required"]=fps_request
     if context["project_kind"]=="game":
         await asyncio.to_thread(stage,rid,token,"researching","查找同类热门游戏及玩法资料")
-        genre="fps" if fps_request else match_genre(context["request"])
+        requested_genre,excluded_genres=genre_preferences(context["request"])
+        genre="fps" if fps_request else requested_genre
         if base:
+            base_plan=None
+            base_genre=None
             try:
-                context["base_game_genre"]=TaskPlan.model_validate_json(base.get("files",{}).get(PLAN_FILE,"{}")).game_genre
+                base_plan=TaskPlan.model_validate_json(base.get("files",{}).get(PLAN_FILE,"{}"))
             except (ValueError,TypeError,AttributeError):
                 pass
+            else:
+                base_genre=base_plan.game_genre
+            if base_genre in (None,"other","puzzle"):
+                base_genre=match_genre(base.get("title","")) or base_genre
+            if base_genre not in excluded_genres:
+                context["base_game_genre"]=base_genre
+                if base_plan and base_plan.mechanics and (genre is None or genre==base_genre):
+                    context["base_mechanics"]=base_plan.mechanics.model_dump()
         genre=genre or context.get("base_game_genre")
+        context["game_genre_hint"]=genre
+        skill=skill_for("game",threejs=dimension=="3d",game_genre=genre)
         context["game_profile"]=game_profile(genre)
         research=await find_game_references(genre or "other")
         context["game_research"]=research
@@ -474,21 +497,29 @@ async def execute_run(run, *, validator_slot=None):
             plan=plan.model_copy(update={"scene_direction":context["scene_direction"]})
         context["task_plan"]=plan.model_dump()
         if game:
-            skill=skill_for("game", threejs=plan.rendering=="threejs")
+            skill=skill_for("game",threejs=plan.rendering=="threejs",game_genre=plan.game_genre)
             context["fps_required"]=plan.experience=="first_person_3d"
             context["game_profile"]=game_profile(plan.game_genre)
         site_files[PLAN_FILE]=json.dumps(plan.model_dump(),ensure_ascii=False,indent=2)
 
     repair=None
-    fallback=None
-    quality_deadline=None
+    failed_issues={}
     if resume:
+        plan_source=resume.pop("plan_source",None)
         repair=resume
+        if coordinated and plan_source:
+            try:
+                apply_plan(TaskPlan.model_validate_json(plan_source))
+            except ValueError:
+                pass
         if resume.get("candidate"):
             try:
                 retained=strict_json(resume["candidate"])
+            except ValueError:
+                retained=None
+            try:
                 retained_files=retained.get("files",{}) if isinstance(retained,dict) else {}
-                if coordinated and isinstance(retained_files,dict) and retained_files.get(PLAN_FILE):
+                if coordinated and plan is None and isinstance(retained_files,dict) and retained_files.get(PLAN_FILE):
                     try:
                         saved_plan=TaskPlan.model_validate_json(retained_files[PLAN_FILE])
                     except (ValueError, TypeError):
@@ -496,8 +527,8 @@ async def execute_run(run, *, validator_slot=None):
                     if saved_plan:
                         apply_plan(saved_plan)
                 artifact,validation=await validate_with_retry(run,resume["candidate"],0,**validation_options)
-            except ValueError as e:
-                repair={"candidate":resume["candidate"],"diagnostics":str(e)}
+            except BuildIssue as issue:
+                repair=issue.repair(resume["candidate"],failed_issues,remaining=True)
             else:
                 if plan:
                     validation["report"]["task_plan"]=plan.model_dump()
@@ -510,7 +541,7 @@ async def execute_run(run, *, validator_slot=None):
         if context["project_kind"]=="game":
             planning_context["game_dimension"]=dimension
             planning_context["game_benchmarks"]={genre:BENCHMARKS[genre]} if genre in BENCHMARKS else {}
-        apply_plan(await agent_decision(run,"planner",planning_context))
+        apply_plan(await agent_plan(run,planning_context))
         await asyncio.to_thread(stage,rid,token,"plan_ready","构建计划已整理",
                                 summary=plan.visual_direction[:220],items=[item[:180] for item in plan.requirements[:3]])
     if plan and context["project_kind"]=="game" and plan.game_genre not in (None,"other",context["game_research"]["genre"]):
@@ -523,24 +554,28 @@ async def execute_run(run, *, validator_slot=None):
             reference="snowball-arcade"
         if reference:
             context["game_reference"]=game_reference(reference)
-    failed_candidates={}
+    async def generate_candidate():
+        return await paid_generate(run,context,repair,skill=skill)
+
     for repair_round in range(1 if repair else 0, MAX_REPAIR_ROUNDS + 1):
         attempt=repair_round+1
-        await asyncio.to_thread(stage,rid,token,"repairing" if repair else "generating",
-                                "修正上一版发现的问题" if repair else "正在生成代码")
+        phase="repairing" if repair else "generating"
+        message="正在生成代码"
+        details={}
         if repair:
+            diagnostic=repair.get("diagnostic") or {}
+            label=REPAIR_POLICIES[diagnostic.get("category","validation")][0]
+            message=f"{label}（第 {repair_round}/{MAX_REPAIR_ROUNDS} 轮）"
+            details={"diagnostic":diagnostic,"round":repair_round}
             repair={**repair,"round":repair_round}
+        await asyncio.to_thread(stage,rid,token,phase,message,**details)
         try:
-            async with asyncio.timeout_at(quality_deadline):
-                raw=await paid_generate(run,context,repair,skill=skill)
-        except (ModelError, CreditError, TimeoutError) as error:
-            if fallback:
-                break
-            if not isinstance(error,ModelError):
+            raw=await retry_model_service(run,generate_candidate,phase,message,**details)
+        except ModelError as error:
+            if not recoverable_model_output(error):
                 raise
-            if not recoverable_model_output(error) or repair_round==MAX_REPAIR_ROUNDS:
-                raise
-            repair={"candidate":(repair or {}).get("candidate"),"diagnostics":str(error)}
+            issue=BuildIssue(error.code,str(error))
+            repair=issue.repair((repair or {}).get("candidate"),failed_issues,remaining=repair_round<MAX_REPAIR_ROUNDS)
             continue
         if coordinated:
             try:
@@ -551,57 +586,11 @@ async def execute_run(run, *, validator_slot=None):
                 candidate["files"][PLAN_FILE]=json.dumps(plan.model_dump(),ensure_ascii=False,indent=2)
                 raw=compact(candidate)
         try:
-            async with asyncio.timeout_at(quality_deadline):
-                artifact,validation=await validate_with_retry(run,raw,attempt,retain=fallback is None,**validation_options)
-        except (ModelError, TimeoutError):
-            if fallback:
-                break
-            raise
-        except (ValueError,TypeError,KeyError) as e:
-            if fallback:
-                break
-            diagnostics=str(e)[:2000]
-            previous=failed_candidates.setdefault(diagnostics,set())
-            repeated=bool(previous)
-            repair={"candidate":raw,"diagnostics":diagnostics,"repeated_failure":repeated}
-            if repeated:
-                repair["repair_strategy"]="根据具体错误定位构建、启动或操作失败的原因，换一种实现修复，保留已正常工作的功能。"
-            await asyncio.to_thread(keep_candidate,run,raw,diagnostics,attempt)
-            if repair_round==MAX_REPAIR_ROUNDS:
-                raise ModelError("VALIDATION_FAILED","代码未通过校验："+str(e)[:1000]) from None
-            fingerprint=sha256(raw.encode()).digest()
-            if fingerprint in previous:
-                raise ModelError("VALIDATION_FAILED","同一版本重复出现运行故障："+diagnostics[:1000]) from None
-            previous.add(fingerprint)
+            artifact,validation=await validate_with_retry(run,raw,attempt,**validation_options)
+        except BuildIssue as issue:
+            repair=issue.repair(raw,failed_issues,remaining=repair_round<MAX_REPAIR_ROUNDS)
             continue
-        report = validation["report"]
-        if fallback:
-            original_report = fallback[1]["report"]
-            if artifact["files"] == fallback[0]["files"] or quality_feedback(report):
-                break
-            if original_report.get("smoke",{}).get("status") == "issue" and report.get("smoke",{}).get("status") != "observed":
-                break
-            findings = original_report.get("source_review",{}).get("findings",[])
-            if any(item["excerpt"] in artifact["files"].get(item["path"],"") for item in findings):
-                break
-            fallback = None
-            report["quality_repair"] = "candidate_rechecked"
-            break
-        remaining = run["started_at"] + settings().run_timeout_seconds - time.time() - 5
-        if game and repair_round < MAX_REPAIR_ROUNDS and remaining > GAME_REVIEW_TIMEOUT:
-            await asyncio.to_thread(stage,rid,token,"reviewing","复核玩法和交互")
-            report["source_review"] = await review_game(run,context,artifact,report.get("smoke",{}))
-        feedback = quality_feedback(report)
-        remaining = run["started_at"] + settings().run_timeout_seconds - time.time() - 5
-        if not feedback or repair_round == MAX_REPAIR_ROUNDS or remaining <= 0:
-            break
-        fallback = (artifact,validation)
-        quality_deadline = asyncio.get_running_loop().time() + min(QUALITY_REPAIR_TIMEOUT,remaining)
-        repair = {"candidate":raw,"diagnostics":feedback,"quality_repair":True}
-        continue
-    if fallback:
-        artifact,validation = fallback
-        validation["report"]["quality_repair"] = "kept_runnable_candidate"
+        break
     if plan:
         validation["report"]["task_plan"]=plan.model_dump()
     validation["report"]["generation_skill"]={"kind":skill.kind,"revision":skill.revision}
@@ -669,6 +658,11 @@ async def main():
         while not stop.is_set():
             if pulse_task.done():
                 await pulse_task
+            if active:
+                cancelled=await asyncio.to_thread(user_stopped_runs,[run["id"] for run in active.values()])
+                for task,run in active.items():
+                    if run["id"] in cancelled and not (task.done() or task.cancelling()):
+                        task.cancel()
             while len(active) < limit and not stop.is_set() and not pulse_task.done():
                 run = await asyncio.to_thread(claim, token)
                 if run is None:
@@ -677,12 +671,13 @@ async def main():
                 active[task] = run
             done, _ = await asyncio.wait(
                 [*active, pulse_task, stopped],
-                timeout=None if len(active) == limit else .5,
+                timeout=1 if len(active) == limit else .5,
                 return_when=asyncio.FIRST_COMPLETED,
             )
             for task in done & active.keys():
                 del active[task]
-                await task
+                if not task.cancelled():
+                    await task
     finally:
         stopped.cancel()
         for task in active:

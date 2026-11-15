@@ -42,6 +42,8 @@ def test_frontend_design_applies_to_website_repairs_with_platform_contract():
     assert '"schema_version":"2"' in system["content"]
     assert "平台的输出格式、运行边界及用户明确要求优先" in system["content"]
     assert "# Frontend Design" in system["content"]
+    assert "事件来源与调用对象" in system["content"] and "自定义组件属性" in system["content"]
+    assert "实际接收者" in repair["content"]
     assert "旧书店" in request["content"] and "横向滚动" in repair["content"]
 
 

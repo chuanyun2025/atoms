@@ -48,7 +48,8 @@ def transactions(conn,visitor_id,before=None):
     ORDER BY l.created_at DESC,l.id DESC LIMIT 50""",owner=visitor_id,before=before)
     for row in rows:
         row["amount"]=amount(row["amount_units"])
-    pending=all_rows(conn,"""SELECT id,run_id,attempt,status,reserved_units,error_code,created_at
+    pending=all_rows(conn,"""SELECT id,run_id,attempt,CASE WHEN dispatch_pending=1 THEN 'reserved' ELSE status END AS status,
+    reserved_units,error_code,created_at
     FROM model_calls WHERE visitor_id=:owner AND status IN ('in_flight','uncertain') ORDER BY created_at DESC LIMIT 100""",owner=visitor_id)
     for row in pending:
         row["reserved"]=amount(row["reserved_units"])
@@ -83,13 +84,29 @@ def reserve_call(run,attempt,input_ceiling,provider_output_limit):
         held=input_hold+output_limit*OUTPUT_RATE
         call={"id":uid(),"visitor_id":run["owner_id"],"run_id":run["id"],"attempt":attempt,
               "lease_token":run["lease_token"],"reserved_units":held,"input_ceiling":input_ceiling,"output_limit":output_limit}
-        execute(conn,"""INSERT INTO model_calls(id,visitor_id,run_id,attempt,lease_token,status,reserved_units,input_ceiling,output_limit,created_at)
-        VALUES(:id,:owner,:run,:attempt,:lease,'in_flight',:held,:input,:output,:now)""",
+        execute(conn,"""INSERT INTO model_calls(id,visitor_id,run_id,attempt,lease_token,status,dispatch_pending,reserved_units,input_ceiling,output_limit,created_at)
+        VALUES(:id,:owner,:run,:attempt,:lease,'in_flight',1,:held,:input,:output,:now)""",
                 id=call["id"],owner=call["visitor_id"],run=call["run_id"],attempt=attempt,lease=call["lease_token"],
                 held=held,input=input_ceiling,output=output_limit,now=now)
         execute(conn,"UPDATE credit_wallets SET held_units=held_units+:held,updated_at=:now WHERE visitor_id=:id",held=held,now=now,id=call["visitor_id"])
-        execute(conn,"UPDATE runs SET model_calls=model_calls+1 WHERE id=:id",id=run["id"])
         return call
+
+
+def start_call(call):
+    with transaction(True) as conn:
+        now=time.time()
+        changed=execute(conn,"""UPDATE model_calls SET dispatch_pending=0
+            WHERE id=:id AND run_id=:run AND lease_token=:lease AND status='in_flight' AND dispatch_pending=1
+              AND EXISTS(SELECT 1 FROM runs WHERE id=:run AND status='running' AND lease_token=:lease AND lease_until>:now)""",
+            id=call["id"],run=call["run_id"],lease=call["lease_token"],now=now)
+        if changed.rowcount:
+            execute(conn,"UPDATE runs SET model_calls=model_calls+1 WHERE id=:id",id=call["run_id"])
+            return
+        pending=one(conn,"""SELECT * FROM model_calls WHERE id=:id AND lease_token=:lease
+            AND status='in_flight' AND dispatch_pending=1""",id=call["id"],lease=call["lease_token"])
+        if pending:
+            _release_call(conn,pending,"CALL_LEASE_LOST")
+    raise CreditError("CALL_LEASE_LOST","任务已停止或请求状态已变化，未发送模型请求")
 
 
 def settle_call(call,input_tokens,output_tokens,provider_request_id=None,operator=False):
@@ -105,6 +122,8 @@ def settle_call(call,input_tokens,output_tokens,provider_request_id=None,operato
             return amount(input_tokens*INPUT_RATE+output_tokens*OUTPUT_RATE)
         if row["status"]=="released":
             raise CreditError("CALL_RELEASED","该调用已释放，请先人工核对")
+        if row["dispatch_pending"]:
+            raise CreditError("CALL_NOT_DISPATCHED","模型请求尚未发送")
         cost=input_tokens*INPUT_RATE+output_tokens*OUTPUT_RATE
         if input_tokens>row["input_ceiling"] or output_tokens>row["output_limit"] or cost>row["reserved_units"]:
             execute(conn,"UPDATE model_calls SET status='uncertain',input_tokens=:input,output_tokens=:output,error_code='USAGE_EXCEEDS_AUTHORIZATION' WHERE id=:id",input=input_tokens,output=output_tokens,id=row["id"])
@@ -134,15 +153,25 @@ def finish_unbilled(call,code,uncertain=False,operator=False):
             raise CreditError("CALL_IDENTITY","积分调用标识不匹配")
         if row["status"] in {"settled","released"}:
             return
-        if uncertain:
+        if uncertain and not row["dispatch_pending"]:
             execute(conn,"UPDATE model_calls SET status='uncertain',error_code=:code WHERE id=:id",code=code,id=row["id"])
             return
-        execute(conn,"UPDATE credit_wallets SET held_units=held_units-:held,updated_at=:now WHERE visitor_id=:owner",held=row["reserved_units"],now=time.time(),owner=row["visitor_id"])
-        execute(conn,"UPDATE model_calls SET status='released',error_code=:code,settled_at=:now WHERE id=:id",code=code,now=time.time(),id=row["id"])
-        execute(conn,"""INSERT INTO credit_ledger(id,visitor_id,event_key,kind,amount_units,run_id,call_id,created_at)
-        VALUES(:id,:owner,:key,'release',0,:run,:call,:now) ON CONFLICT(visitor_id,event_key) DO NOTHING""",
-                id=uid(),owner=row["visitor_id"],key="release:"+row["id"],run=row["run_id"],call=row["id"],now=time.time())
+        _release_call(conn,row,code)
 
 
-def mark_run_uncertain(conn,run_id,code):
-    execute(conn,"UPDATE model_calls SET status='uncertain',error_code=:code WHERE run_id=:id AND status='in_flight'",code=code,id=run_id)
+def _release_call(conn,row,code):
+    now=time.time()
+    execute(conn,"UPDATE credit_wallets SET held_units=held_units-:held,updated_at=:now WHERE visitor_id=:owner",
+            held=row["reserved_units"],now=now,owner=row["visitor_id"])
+    execute(conn,"UPDATE model_calls SET status='released',dispatch_pending=0,error_code=:code,settled_at=:now WHERE id=:id",
+            code=code,now=now,id=row["id"])
+    execute(conn,"""INSERT INTO credit_ledger(id,visitor_id,event_key,kind,amount_units,run_id,call_id,created_at)
+    VALUES(:id,:owner,:key,'release',0,:run,:call,:now) ON CONFLICT(visitor_id,event_key) DO NOTHING""",
+            id=uid(),owner=row["visitor_id"],key="release:"+row["id"],run=row["run_id"],call=row["id"],now=now)
+
+
+def finish_model_calls(conn,run_id,code):
+    for row in all_rows(conn,"SELECT * FROM model_calls WHERE run_id=:id AND status='in_flight' AND dispatch_pending=1",id=run_id):
+        _release_call(conn,row,code)
+    execute(conn,"""UPDATE model_calls SET status='uncertain',error_code=:code
+        WHERE run_id=:id AND status='in_flight' AND dispatch_pending=0""",code=code,id=run_id)

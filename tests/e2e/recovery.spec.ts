@@ -16,7 +16,7 @@ test("模板收到实现说明后改为请求逐页内容，并交付可翻页�
   await expect(page.getByTestId("build-failure")).toHaveCount(0);
 });
 
-test("幻灯片下一页按钮无响应时修复一次",async({page})=>{
+test("幻灯片启动异常时修复一次",async({page})=>{
   await page.goto("/slides");
   await page.getByLabel("描述应用需求").fill("[slides-repair] 制作一套两页的社区绿地幻灯片");
   const accepted=page.waitForResponse(r=>r.url().endsWith("/runs")&&r.request().method()==="POST"&&r.status()===202);
@@ -46,18 +46,38 @@ test("标准 cite 标签自动兼容，首次生成直接交付",async({page})=>
   await expect(page.getByTestId("wallet-available")).toHaveText("499.888000");
 });
 
-test("连续三轮修复后在原任务交付，无需手动继续",async({page})=>{
+test("不同根因可以修复到第十轮并在原任务交付",async({page})=>{
   await page.goto("/");
   await page.getByLabel("描述应用需求").fill("[repair-loop] 做一个计数网站");
   const accepted=page.waitForResponse(r=>r.url().endsWith("/runs")&&r.request().method()==="POST"&&r.status()===202);
   await page.getByRole("button",{name:"开始创建",exact:true}).click();
   const run=await (await accepted).json();
-  await expect(page.getByRole("region",{name:"构建进度"})).toContainText("修正上一版发现的问题");
+  await expect(page.getByRole("region",{name:"构建进度"})).toContainText("第 1/10 轮");
   await expect(page.getByRole("button",{name:"查看版本 v1 预览"})).toBeVisible();
   const result=await (await page.request.get("/api/v1/runs/"+run.id)).json();
-  expect(result).toMatchObject({status:"succeeded",model_calls:5,retry_of_run_id:null});
+  expect(result).toMatchObject({status:"succeeded",model_calls:12,retry_of_run_id:null});
   await expect(page.getByTestId("build-failure")).toHaveCount(0);
   await expect(page.frameLocator('iframe[title="应用预览"]').getByRole("button",{name:"增加一次"})).toBeVisible();
+});
+
+test("同一导入错误换了行号也在两次自动修复后停止",async({page})=>{
+  await page.goto("/");
+  await page.getByLabel("描述应用需求").fill("[repeat-root] 做一个计数网站");
+  const accepted=page.waitForResponse(r=>r.url().endsWith("/runs")&&r.request().method()==="POST"&&r.status()===202);
+  await page.getByRole("button",{name:"开始创建",exact:true}).click();
+  const run=await (await accepted).json();
+  const failure=page.getByTestId("build-failure");
+  await expect(failure.getByText("代码编译未通过。")).toBeVisible();
+  await failure.getByText("查看问题详情").click();
+  await expect(failure.locator("pre")).toContainText("同一问题尝试修复 2 次后仍未通过");
+  await expect(failure.locator("pre")).toContainText("src/App.tsx:3:");
+  await expect(failure.locator("pre")).toContainText("./same-module");
+  await expect(failure.getByRole("button",{name:"继续修复"})).toBeEnabled();
+  const result=await (await page.request.get("/api/v1/runs/"+run.id)).json();
+  expect(result).toMatchObject({status:"failed",model_calls:4,error_code:"COMPILE_IMPORT"});
+  const progress=page.getByRole("region",{name:"构建进度"});
+  await progress.getByText("构建记录", {exact:true}).click();
+  await expect(progress.getByText("修复编译错误（第 2/10 轮）")).toBeVisible();
 });
 
 test("失败后保留内容、一键继续修复、原生 datalist 与积分结算",async({page})=>{
@@ -68,13 +88,13 @@ test("失败后保留内容、一键继续修复、原生 datalist 与积分结�
   const firstRun=await (await firstAccepted).json();
   const card=page.getByTestId("build-failure");
   await expect(card.getByText("这次还没生成可用版本",{exact:true})).toBeVisible();
-  await expect(card.getByText("查看问题详情",{exact:true})).toHaveCount(0);
-  await expect(card.locator("pre")).toHaveCount(0);
-  expect(await (await page.request.get("/api/v1/runs/"+firstRun.id)).json()).toMatchObject({status:"failed",model_calls:3});
+  await expect(card.getByText("生成产物格式未通过检查。",{exact:true})).toBeVisible();
+  await expect(card.locator("pre")).toBeHidden();
+  expect(await (await page.request.get("/api/v1/runs/"+firstRun.id)).json()).toMatchObject({status:"failed",model_calls:4});
   await page.reload();
   await expect(card.getByRole("button",{name:"继续修复",exact:true})).toBeEnabled();
   await page.getByRole("button",{name:"积分余额",exact:true}).filter({visible:true}).click();
-  await expect(page.getByTestId("wallet-available")).toHaveText("499.832000");
+  await expect(page.getByTestId("wallet-available")).toHaveText("499.776000");
   await page.getByRole("button",{name:"关闭",exact:true}).click();
   await page.screenshot({path:"test-results/recoverable-failure.png",fullPage:true});
   const accepted=page.waitForResponse(r=>r.url().endsWith("/runs")&&r.request().method()==="POST"&&r.status()===202);
@@ -91,7 +111,7 @@ test("失败后保留内容、一键继续修复、原生 datalist 与积分结�
   await preview.getByRole("button",{name:"增加一次"}).click();
   await expect(preview.locator("#save")).toHaveText("已保存");
   await page.getByRole("button",{name:"积分余额",exact:true}).filter({visible:true}).click();
-  await expect(page.getByTestId("wallet-available")).toHaveText("499.720000");
+  await expect(page.getByTestId("wallet-available")).toHaveText("499.664000");
   await page.getByRole("button",{name:"关闭",exact:true}).click();
   await page.screenshot({path:"test-results/repaired-application.png",fullPage:true});
 });

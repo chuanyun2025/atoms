@@ -1,17 +1,17 @@
 import { chromium } from "playwright";
 import { randomBytes } from "node:crypto";
 import { csp, documentFor, type Compiled } from "./compiler.js";
+import { ValidationDiagnostic } from "./diagnostic.js";
 import { checkSlidePreview, SLIDES_NAVIGATION } from "./slides-check.js";
 import { checkGame, GAME_PLAY } from "./game-check.js";
 import {checkFps,FPS_CHECK} from "./fps-check.js";
 import {checkRace,RACE_CHECK} from "./race-check.js";
 import type {InputCheck} from "./input-checks.js";
 import {smokeGame} from "./game-smoke.js";
-import {deliverySmoke,type PreviewKind} from "./delivery-smoke.js";
 
 class BrowserUnavailable extends Error {}
 
-export async function probe(compiled: Compiled, origin: string, behaviorCheck?: typeof SLIDES_NAVIGATION | typeof GAME_PLAY, gameReplay: string[] = [], experienceCheck?:typeof FPS_CHECK | typeof RACE_CHECK, gameChecks:InputCheck[] = [], requireWebgl=false, gameSmoke=false,allowUnconfirmedInput=false, options:{startupOnly?:boolean;lightweight3d?:boolean;previewKind?:PreviewKind}={}) {
+export async function probe(compiled: Compiled, origin: string, behaviorCheck?: typeof SLIDES_NAVIGATION | typeof GAME_PLAY, gameReplay: string[] = [], experienceCheck?:typeof FPS_CHECK | typeof RACE_CHECK, gameChecks:InputCheck[] = [], requireWebgl=false, gameSmoke=false,allowUnconfirmedInput=false, options:{startupOnly?:boolean;lightweight3d?:boolean}={}) {
   const instance_id = randomBytes(16).toString("hex"), channel_nonce = randomBytes(24).toString("hex");
   const candidate = origin + "/__atoms_candidate";
   const parent = origin + "/__atoms_parent";
@@ -56,41 +56,47 @@ export async function probe(compiled: Compiled, origin: string, behaviorCheck?: 
       const reported = await page.evaluate(() => (window as unknown as {previewErrors?: string[]}).previewErrors ?? []);
       return [...new Set([...issues, ...reported])];
     };
-    const result = await page.evaluate(async ({candidate,instance_id,channel_nonce}) => {
-      return await new Promise<{ready:boolean; errors:string[]; text:string}>(resolve => {
-        const errors: string[] = [], values: Record<string, unknown> = Object.create(null);
-        Object.defineProperty(window, "previewErrors", {value: errors});
+    const ready = await page.evaluate(({candidate,instance_id,channel_nonce}) => {
+      const errors: string[] = [];
+      let values: Record<string, unknown> = Object.create(null);
+      Object.defineProperty(window, "previewErrors", {value: errors});
+      return new Promise<boolean>(resolve => {
         const iframe = document.createElement("iframe");
         iframe.style.cssText = "display:block;width:100%;height:100vh;border:0";
         iframe.sandbox.add("allow-scripts","allow-pointer-lock"); iframe.src = candidate;
-        const timer = setTimeout(() => resolve({ready:false,errors:[...errors,"应用启动超时"],text:""}), 6000);
+        const timer = setTimeout(() => resolve(false), 6000);
         iframe.onload = () => {
           const channel = new MessageChannel();
           channel.port1.onmessage = ({data}) => {
             if (data.instance_id !== instance_id || data.protocol_version !== 1) return;
-            if (data.type === "storage.set") values[data.payload.key] = data.payload.value;
+            if (data.type === "storage.set") {
+              const next = Object.assign(Object.create(null),values,{[data.payload.key]:data.payload.value});
+              if (Object.keys(next).length > 128 || new TextEncoder().encode(JSON.stringify(next)).length > 65536) {
+                channel.port1.postMessage({instance_id,message_id:data.message_id,ok:false,error:"项目业务数据最多 128 项、总计 64 KiB"});
+                return;
+              }
+              values = next;
+            }
             if (data.type === "storage.remove") delete values[data.payload.key];
             if (data.type === "runtime.error") {
               if (errors.length < 20) errors.push(String(data.payload.message).slice(0,600));
             }
             channel.port1.postMessage({instance_id,message_id:data.message_id,ok:true});
-            if (data.type === "runtime.ready") setTimeout(() => { clearTimeout(timer); resolve({ready:true,errors,text:"loaded"}); },350);
+            if (data.type === "runtime.ready") setTimeout(() => { clearTimeout(timer); resolve(true); },350);
           };
-          iframe.contentWindow!.postMessage({type:"atoms.init",instance_id,channel_nonce,values:{},read_only:false},"*",[channel.port2]);
+          iframe.contentWindow!.postMessage({type:"atoms.init",instance_id,channel_nonce,values,read_only:false},"*",[channel.port2]);
         };
         document.body.appendChild(iframe);
       });
     }, {candidate,instance_id,channel_nonce});
-    if (!result.ready || result.errors.length || issues.length) throw new Error([...result.errors,...issues].join("; ") || "应用启动失败");
-    const frame = page.frames().find(f => f.url() === candidate);
-    if (options.previewKind) {
-      const smoke = frame ? await deliverySmoke(frame,options.previewKind,options.lightweight3d ? 5500 : 3000) : {status:"unconfirmed" as const};
-      const errors = await runtimeErrors();
-      if (errors.length) throw new Error(errors.join("; "));
-      return {ready:true,acceptance:"smoke" as const, sandbox_enabled:true,smoke};
+    const launchErrors = await runtimeErrors();
+    if (launchErrors.length) {
+      throw new ValidationDiagnostic("PREVIEW_RUNTIME_ERROR",launchErrors.join("; "),{subject:launchErrors[0]});
     }
+    if (!ready) throw new ValidationDiagnostic("PREVIEW_STARTUP_TIMEOUT","应用启动超时，预览未收到就绪事件");
     if (options.startupOnly) return {ready:true, acceptance:"startup" as const, sandbox_enabled:true};
 
+    const frame = page.frames().find(f => f.url() === candidate);
     const visible = frame ? await frame.locator("body").innerText({timeout:1000}) : "";
     const interactive = frame ? await frame.locator("button,input,select,textarea,a,summary,[role=button]").count() : 0;
     if (!visible.trim() && interactive === 0 && !await frame?.locator("canvas:visible,img:visible,svg:visible").count()) throw new Error("页面没有可见内容或交互控件");
@@ -153,12 +159,12 @@ if (process.argv.includes("--child")) {
   for await (const part of process.stdin) { const chunk=Buffer.from(part);size+=chunk.length;if(size>32*1024*1024)process.exit(2);chunks.push(chunk); }
   const text=Buffer.concat(chunks).toString("utf8");
   try {
-    const {compiled,origin,behaviorCheck,gameReplay,experienceCheck,gameChecks,requireWebgl,gameSmoke,allowUnconfirmedInput,startupOnly,lightweight3d,previewKind} = JSON.parse(text);
-    const report = await probe(compiled, origin, behaviorCheck, gameReplay,experienceCheck,gameChecks,requireWebgl,gameSmoke,allowUnconfirmedInput,{startupOnly,lightweight3d,previewKind});
+    const {compiled,origin,behaviorCheck,gameReplay,experienceCheck,gameChecks,requireWebgl,gameSmoke,allowUnconfirmedInput,startupOnly,lightweight3d} = JSON.parse(text);
+    const report = await probe(compiled, origin, behaviorCheck, gameReplay,experienceCheck,gameChecks,requireWebgl,gameSmoke,allowUnconfirmedInput,{startupOnly,lightweight3d});
     process.stdout.write(JSON.stringify({ok:true,report}));
   } catch (e) {
-    process.stdout.write(JSON.stringify({ok:false,error:String((e as Error).message).slice(0,2000),
-      ...(e instanceof BrowserUnavailable ? {code:"browser_unavailable"} : {})}));
+    process.stdout.write(JSON.stringify(e instanceof ValidationDiagnostic ? e.response() :
+      {ok:false,error:e instanceof BrowserUnavailable ? e.message : "隔离浏览器检查未完成",code:"browser_unavailable"}));
     process.exitCode = 1;
   }
 }

@@ -7,7 +7,7 @@ import pytest
 from atoms.config import settings
 from atoms.provider_client import ProviderClient
 from atoms.provider_contract import ModelError
-from atoms.provider_gateway import create_app
+from atoms.provider_gateway import complete_until_disconnect, create_app
 from atoms.provider_secrets import ProviderSecrets
 from atoms.provider_settings import ProviderSettings
 
@@ -120,6 +120,31 @@ def test_text_deadline_releases_gateway_slot(monkeypatch):
 
     asyncio.run(check())
     assert submitted==2
+
+
+def test_gateway_disconnect_cancels_active_text_completion():
+    async def check():
+        started=asyncio.Event()
+        cancelled=asyncio.Event()
+
+        class Request:
+            async def receive(self):
+                await started.wait()
+                return {"type":"http.disconnect"}
+
+        async def complete():
+            started.set()
+            try:
+                await asyncio.Future()
+            finally:
+                cancelled.set()
+
+        with pytest.raises(ModelError) as error:
+            await asyncio.wait_for(complete_until_disconnect(Request(),complete),timeout=1)
+        assert cancelled.is_set()
+        assert error.value.code=="CALL_INTERRUPTED" and error.value.uncertain
+
+    asyncio.run(check())
 
 
 def test_kms_secret_overrides_environment_and_is_cached(monkeypatch):

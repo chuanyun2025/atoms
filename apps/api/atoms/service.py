@@ -9,6 +9,9 @@ from .security import uid
 from .credits import require_balance,CreditError
 from .slide_templates import slide_template_reference
 
+USER_STOPPED = "USER_STOPPED"
+LEGACY_ACCEPTANCE_ERRORS = {"ACCEPTANCE_FAILED", "ACCEPTANCE_UNCONFIRMED"}
+
 
 def error(status,code,message):
     raise HTTPException(status, detail={"code":code,"message":message})

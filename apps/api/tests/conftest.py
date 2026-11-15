@@ -21,11 +21,11 @@ command.upgrade(Config("alembic.ini"),"head")
 def clean(monkeypatch):
     from atoms import worker
     from atoms.artifacts import strict_json
-    from atoms.model_fixture import test_decision
-    from atoms.orchestration import TaskPlan, TaskReview
-    async def decision(run,role,context):
-        return (TaskPlan if role=="planner" else TaskReview).model_validate(strict_json(test_decision(role,context)))
-    monkeypatch.setattr(worker,"agent_decision",decision)
+    from atoms.model_fixture import test_plan
+    from atoms.orchestration import parse_plan
+    async def plan(run,context):
+        return parse_plan(strict_json(test_plan(context)),context=context)
+    monkeypatch.setattr(worker,"agent_plan",plan)
     with transaction(True) as conn:
         for name in ["video_jobs","credit_ledger","media_calls","media_assets","run_workspace","run_candidates","model_calls","credit_wallets","system_settings","quota_windows","app_states","project_actions","request_keys","run_events","publications","versions","artifacts","messages","runs","projects","visitors"]:
             execute(conn,"DELETE FROM "+name)

@@ -12,4 +12,10 @@ async def validate_artifact(artifact, request_id, kind, lightweight_3d):
                   "lightweight_3d": lightweight_3d, "preview_kind": kind},
         )
         response.raise_for_status()
-        return response.json()
+        try:
+            payload=response.json()
+        except ValueError:
+            payload=None
+        if not isinstance(payload,dict) or type(payload.get("ok")) is not bool:
+            raise httpx.RemoteProtocolError("校验服务返回无效响应",request=response.request)
+        return payload

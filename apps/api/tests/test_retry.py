@@ -4,6 +4,7 @@ import uuid
 import httpx
 import pytest
 from atoms import worker
+from atoms.build_diagnostics import BuildIssue
 from atoms.db import transaction,one,execute,compact
 from atoms.model import ModelError,ModelResult,Usage
 from atoms.worker import claim,fail,keep_candidate,execute_run,LeaseLost
@@ -37,6 +38,18 @@ def validator(monkeypatch,results):
     monkeypatch.setattr(httpx,"AsyncClient",lambda **kwargs:original(transport=httpx.MockTransport(handle)))
 
 
+def test_equivalent_sandbox_sites_get_a_new_budget_when_one_is_removed():
+    failures={}
+    for occurrences in (3,2,1):
+        issue=BuildIssue.from_validator({"error":"原生提交","diagnostic":{
+            "code":"SANDBOX_FORM_SUBMIT","file":"src/App.tsx","subject":"onSubmit@App#same","occurrences":occurrences,
+        }})
+        assert issue.repair("draft",failures,remaining=True)["repeated_failure"] is False
+    assert issue.repair("draft",failures,remaining=True)["repeated_failure"] is True
+    with pytest.raises(ModelError,match="尝试修复 2 次后仍未通过"):
+        issue.repair("draft",failures,remaining=True)
+
+
 def test_run_workspace_source_and_sandbox_follow_build_lifecycle(client,monkeypatch):
     from fastapi.testclient import TestClient
 
@@ -51,13 +64,13 @@ def test_run_workspace_source_and_sandbox_follow_build_lifecycle(client,monkeypa
     def handle(request):
         assert request.url.path=="/internal/validate"
         assert client.get(path+"/source").json()["files"]==ARTIFACT["files"]
-        assert client.get(path).json()["workspace"]=={"source_revision":1,"has_preview":False}
+        assert client.get(path).json()["workspace"]=={"source_revision":1,"has_preview":False,"preview_digest":None}
         assert client.post(path+"/preview-ticket",json={}).status_code==404
         return httpx.Response(200,json=VALIDATION)
 
     monkeypatch.setattr(httpx,"AsyncClient",lambda **kwargs:original(transport=httpx.MockTransport(handle)))
     artifact,validation=asyncio.run(worker.validate_candidate(run,compact(ARTIFACT),1))
-    assert client.get(path).json()["workspace"]=={"source_revision":1,"has_preview":True}
+    assert client.get(path).json()["workspace"]=={"source_revision":1,"has_preview":True,"preview_digest":VALIDATION["compiled"]["digest"]}
     ticket=client.post(path+"/preview-ticket",json={}).json()
     assert client.get(ticket["url"]).status_code==403
     iframe={"Sec-Fetch-Dest":"iframe","Sec-Fetch-Site":"same-origin"}
@@ -196,19 +209,59 @@ def test_temporary_validator_failure_rechecks_the_same_candidate(client,monkeypa
     assert client.get("/api/v1/runs/"+run["id"]).json()["model_calls"]==0
 
 
-def test_game_recovery_after_three_repairs_can_deliver_without_more_model_calls(client,monkeypatch):
+@pytest.mark.parametrize("code,uncertain,retryable",[
+    ("PROVIDER_RATE_LIMIT",False,True),
+    ("MODEL_CONNECTION",False,True),
+    ("MODEL_NETWORK",True,False),
+    ("MODEL_AUTH",False,False),
+])
+def test_model_service_only_retries_safe_failures(client,monkeypatch,code,uncertain,retryable):
+    project=create_project(client)
+    assert submit(client,project["id"]).status_code==202
+    run=claim("test-leader")
+    calls=[]
+    artifact={**ARTIFACT,"schema_version":"2","files":{
+        "src/App.tsx":"export default function App(){return <main>测试</main>}",
+        "src/styles.css":"body{margin:0}","src/helper.ts":"export {}",
+    }}
+
+    async def generate(run,context,repair,*,skill):
+        calls.append(repair)
+        if len(calls)==1:
+            raise ModelError(code,"模型服务测试",uncertain=uncertain)
+        return compact(artifact)
+
+    monkeypatch.setattr(worker,"paid_generate",generate)
+    monkeypatch.setattr(worker,"MODEL_RETRY_DELAYS",(0,))
+    validator(monkeypatch,[VALIDATION])
+    if retryable:
+        asyncio.run(execute_run(run))
+        assert calls==[None,None]
+        assert client.get("/api/v1/runs/"+run["id"]).json()["status"]=="succeeded"
+        assert "event: model_wait" in client.get("/api/v1/runs/"+run["id"]+"/events").text
+    else:
+        with pytest.raises(ModelError) as caught:
+            asyncio.run(execute_run(run))
+        assert calls==[None]
+        assert caught.value.code==code
+
+
+def test_legacy_acceptance_failure_rechecks_saved_draft_without_another_model_call(client,monkeypatch):
     from atoms.model_fixture import game_artifact
     from atoms.orchestration import PLAN_FILE,TaskPlan
 
     project=client.post("/api/v1/projects",json={"client_key":"game-final-recheck","title":"游戏恢复","kind":"game"}).json()
     artifact=json.loads(game_artifact(broken=True,incomplete_replay=False))
-    artifact["files"][PLAN_FILE]=compact(TaskPlan(experience="other_game",rendering="dom",
+    plan=TaskPlan(experience="other_game",rendering="dom",
         requirements=["可进入游戏","能操作"],visual_direction="清晰可辨",
-        specialist_brief="浏览器游戏",acceptance=["启动","运行"]).model_dump())
+        specialist_brief="浏览器游戏",game_genre="other").model_dump()
+    artifact["files"][PLAN_FILE]=compact({**plan,"acceptance":["启动","运行"],"browser_acceptance":[
+        {"name":"旧验收使用不存在的控件","steps":[{"action":"click","target":"wrong-target"}]},
+    ]})
     assert submit(client,project["id"]).status_code==202
     source=claim("test-leader")
     keep_candidate(source,compact(artifact),"自动输入结果未确认",4)
-    fail(source,"VALIDATION_FAILED","自动输入结果未确认")
+    fail(source,"ACCEPTANCE_UNCONFIRMED","自动输入结果未确认")
     with transaction(True) as conn:
         execute(conn,"UPDATE credit_wallets SET balance_units=0")
     assert retry(client,project,source).status_code==202
@@ -221,11 +274,13 @@ def test_game_recovery_after_three_repairs_can_deliver_without_more_model_calls(
         body=json.loads(request.content)
         assert "behavior_check" not in body
         assert "game_smoke" not in body
+        assert "browser_acceptance" not in body
+        assert json.loads(body["artifact"]["files"][PLAN_FILE])==plan
         return httpx.Response(200,json=VALIDATION)
 
     original=httpx.AsyncClient
     monkeypatch.setattr(httpx,"AsyncClient",lambda **kwargs:original(transport=httpx.MockTransport(validate)))
-    monkeypatch.setattr(worker,"agent_decision",no_model)
+    monkeypatch.setattr(worker,"agent_plan",no_model)
     monkeypatch.setattr(worker,"paid_generate",no_model)
     asyncio.run(execute_run(run))
     assert client.get("/api/v1/runs/"+run["id"]).json()["status"]=="succeeded"
@@ -258,5 +313,5 @@ def test_slide_edits_use_startup_even_when_base_used_navigation(client,monkeypat
         artifact=one(conn,"SELECT a.validation_json FROM artifacts a JOIN versions v ON v.artifact_id=a.id WHERE v.source_run_id=:run",run=run["id"])
     saved=json.loads(artifact["validation_json"])
     assert "behavior_check" not in saved
-    assert saved["acceptance"]=="smoke"
+    assert saved["acceptance"]=="startup"
     assert saved["generation_skill"]["kind"]=="slides"

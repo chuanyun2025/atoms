@@ -43,4 +43,21 @@ describe("React project compiler",()=>{
     const files={...value.files,"../outside.ts":"export default 0;"};
     await expect(compileReact({...value,files})).rejects.toThrow(/不符合约定/);
   });
+
+  it("checks only runtime modules and skips type expressions",async()=>{
+    const value=artifact();
+    const files:Record<string,string>={...value.files,
+      "src/unused.ts":'export type RecordMap = Record<string,string>; export const legacy = () => window.localStorage.length;',
+      "src/App.tsx":`
+        import type {RecordMap} from "./unused";
+        type StorageName = typeof window.localStorage;
+        export default function App(){return <form onSubmit={undefined}><button type="button">Ready</button></form>}
+      `,
+    };
+    await expect(compileReact({...value,files})).resolves.toMatchObject({compiler_version:"2"});
+    files["src/App.tsx"]='import {legacy} from "./unused"; export default function App(){return <main>{legacy()}</main>}';
+    await expect(compileReact({...value,files})).rejects.toMatchObject({
+      code:"SANDBOX_NATIVE_STORAGE",location:{file:"src/unused.ts"},
+    });
+  });
 });

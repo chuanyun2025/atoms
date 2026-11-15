@@ -18,12 +18,28 @@ class GenerationSkill:
     revision: str
 
 
-def skill_for(kind: str | None, *, threejs: bool = False) -> GenerationSkill:
-    return _load_skill(kind if kind in _KINDS else "web", threejs=kind == "game" and threejs)
+_MECHANICS_REFERENCES = {
+    "tile_merge":"tile-merge",
+    "platformer":"platformer",
+    "arcade_platformer":"platformer",
+}
 
 
 @cache
-def _load_skill(kind: str, *, threejs: bool) -> GenerationSkill:
+def game_mechanics_skill(genre: str | None = None) -> str:
+    text = (_DIRECTORY / "game-mechanics.md").read_text(encoding="utf-8").strip()
+    if reference := _MECHANICS_REFERENCES.get(genre):
+        text += "\n\n" + (_DIRECTORY / f"game-mechanics-{reference}.md").read_text(encoding="utf-8").strip()
+    return text
+
+
+def skill_for(kind: str | None, *, threejs: bool = False, game_genre: str | None = None) -> GenerationSkill:
+    return _load_skill(kind if kind in _KINDS else "web", threejs=kind == "game" and threejs,
+                       genre=game_genre if kind == "game" else None)
+
+
+@cache
+def _load_skill(kind: str, *, threejs: bool, genre: str | None) -> GenerationSkill:
     text = (_DIRECTORY / f"{kind}.md").read_text(encoding="utf-8").strip()
     if kind == "web":
         upstream = (_DIRECTORY / "frontend-design" / "SKILL.md").read_text(encoding="utf-8")
@@ -33,7 +49,7 @@ def _load_skill(kind: str, *, threejs: bool) -> GenerationSkill:
     if kind == "game":
         filename = "threejs-game.md" if threejs else "game-2d.md"
         guidance = (_DIRECTORY / filename).read_text(encoding="utf-8").strip()
-        text = "\n\n".join((text, guidance))
+        text = "\n\n".join((text, guidance, game_mechanics_skill(genre)))
     return GenerationSkill(
         kind=kind,
         instructions=text,

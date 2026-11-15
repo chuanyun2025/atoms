@@ -11,7 +11,7 @@ from atoms.main import app
 from atoms.config import settings
 from atoms.db import transaction,one,execute
 from atoms.security import uid
-from atoms.credits import reserve_call,settle_call,finish_unbilled,CreditError
+from atoms.credits import reserve_call,start_call,settle_call,finish_unbilled,CreditError
 from atoms.worker import claim,paid_generate,recover_expired
 from atoms.model import ModelError,Prepared,generate
 from atoms.skills import skill_for
@@ -43,11 +43,13 @@ def test_welcome_only_once_and_identity(client):
 def test_exact_prices_and_idempotent_settlement(client):
     run=running(client)
     call=reserve_call(run,1,1_000_000,1_000_000)
+    start_call(call)
     assert settle_call(call,1_000_000,1_000_000)=="100.000000"
     assert settle_call(call,1_000_000,1_000_000)=="100.000000"
     result=client.get("/api/v1/wallet").json()
     assert result["balance"]=="400.000000" and result["spent"]=="100.000000" and result["held"]=="0.000000"
     call2=reserve_call(run,2,10,10)
+    start_call(call2)
     assert settle_call(call2,1,1)=="0.000100"
     assert client.get("/api/v1/wallet").json()["balance"]=="399.999900"
     with pytest.raises(CreditError):settle_call(call2,2,1)
@@ -86,6 +88,7 @@ def test_concurrent_authorizations_cannot_overdraw(client):
 def test_crash_holds_then_reconciliation(client):
     run=running(client)
     call=reserve_call(run,1,2000,393216)
+    start_call(call)
     with transaction(True) as conn:
         execute(conn,"UPDATE runs SET lease_until=:now WHERE id=:id",id=run["id"],now=time.time()-1)
     recover_expired()
@@ -100,6 +103,7 @@ def test_crash_holds_then_reconciliation(client):
 def test_excess_usage_stays_pending_without_negative_wallet(client):
     run=running(client)
     call=reserve_call(run,1,100,100)
+    start_call(call)
     with pytest.raises(CreditError):settle_call(call,1000,1000)
     wallet=client.get("/api/v1/wallet").json()
     assert wallet["balance"]=="500.000000" and wallet["held_units"]==call["reserved_units"]

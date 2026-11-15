@@ -3,7 +3,7 @@ import {Link,NavLink,Route,Routes,useParams} from "react-router-dom";
 import Modal from "./Modal";
 import WalletButton,{useWallet} from "./Wallet";
 import {useQuery,useQueryClient} from "@tanstack/react-query";
-import {ArrowUp,Plus,Layers3,PanelLeftClose,PanelLeftOpen,Settings2,ChevronDown,Check,CheckCircle2,Code2,Eye,Download,History,Monitor,Smartphone,RotateCcw,X,Sparkles,LayoutGrid,ArrowLeft,LoaderCircle,AlertCircle,Braces,House,Menu,ChevronRight,Save} from "lucide-react";
+import {ArrowUp,Plus,Layers3,PanelLeftClose,PanelLeftOpen,Settings2,ChevronDown,Check,CheckCircle2,Code2,Eye,Download,History,Monitor,Smartphone,RotateCcw,X,Sparkles,LayoutGrid,ArrowLeft,LoaderCircle,AlertCircle,Braces,House,Menu,ChevronRight,Save,Square} from "lucide-react";
 import {api,active,ApiError,date,key,type Message,type Project,type ProjectKind,type Run,type RunSource,type Version} from "./api";
 import {creationKinds,modes} from "./creationModes";
 import {StudioLanding,StudioHeader,ProjectLibrary,useProjects,useCapabilities} from "./Studio";
@@ -85,6 +85,8 @@ function Workspace(){
   const [sourceError,setSourceError]=useState<{vid:string;message:string}>();
   const [savedSource,setSavedSource]=useState<{number:number;changed:boolean}>();
   const [savingSource,setSavingSource]=useState(false);
+  const [selectedDraft,setSelectedDraft]=useState<string|null>(null);
+  const [stopping,setStopping]=useState(false);
   const sourceRequest=useRef<{body:string;key:string}>(null);
   const bottom=useRef<HTMLDivElement>(null);
   const {data:project,error:projectError}=useQuery({queryKey:["project",pid],queryFn:()=>api<Project>("/projects/"+pid)});
@@ -98,14 +100,19 @@ function Workspace(){
   const vid=selected||project?.current_version_id;
   const {data:version,isPending:versionPending}=useQuery({queryKey:["version",pid,vid],queryFn:()=>api<Version>("/projects/"+pid+"/versions/"+vid),enabled:!!vid});
   const historical=!!vid&&vid!==project?.current_version_id;
-  const showRunSource=!historical&&!!run?.workspace?.source_revision&&(busy||!vid);
+  const pendingAcceptance=!busy&&run?.status==="failed"&&
+    ["ACCEPTANCE_FAILED","ACCEPTANCE_UNCONFIRMED"].includes(run.error_code??"");
+  const userStopped=run?.status==="interrupted"&&run.error_code==="USER_STOPPED";
+  const retainedPreview=!busy&&(pendingAcceptance||userStopped)&&!!run?.workspace?.has_preview;
+  const showRetainedDraft=retainedPreview&&(!vid||selectedDraft===runId);
+  const showRunSource=!historical&&!!run?.workspace?.source_revision&&(busy||!vid||showRetainedDraft);
   const {data:runSource}=useQuery({
     queryKey:["run-source",runId,run?.workspace?.source_revision],
     queryFn:()=>api<RunSource>("/runs/"+runId+"/source"),enabled:showRunSource,
     placeholderData:previous=>previous,retry:false,
   });
   const source=showRunSource?runSource:undefined;
-  const draftPreview=!historical&&busy&&active(run)&&!!run?.workspace?.has_preview;
+  const draftPreview=!historical&&(showRetainedDraft||busy&&active(run))&&!!run?.workspace?.has_preview;
   const files=source?.files??version?.artifact?.files;
   const canPreview=draftPreview||!!version?.artifact;
   const displayTab=files&&(tab==="code"||!canPreview)?"code":"preview";
@@ -125,6 +132,7 @@ function Workspace(){
     }
   }
   function showVersion(id:string){
+    setSelectedDraft(null);
     setSelected(id===project?.current_version_id?null:id);
     setTab("preview");
     setMobileView("preview");
@@ -203,6 +211,16 @@ function Workspace(){
     e.preventDefault();
     await sendRun(prompt);
   }
+  async function stopRun(){
+    const id=project?.active_run_id;
+    if(!id||stopping)return;
+    setStopping(true);setError("");
+    try{
+      await api<Run>("/runs/"+id+"/stop","POST",{});
+      await Promise.all([refresh(),client.invalidateQueries({queryKey:["run",id]})]);
+    }catch(e){setError((e as Error).message)}
+    finally{setStopping(false)}
+  }
   async function sendRun(request:string,retryOf?:string){
     if(!project||!request.trim()||sending||busy||savingSource)return;
     setSending(true);setError("");
@@ -244,8 +262,8 @@ function Workspace(){
         <span className="wallet-mobile"><WalletButton compact/></span>
         <span className="autosave"><CheckCircle2 size={14}/>项目已保存</span>
         <button aria-label="版本记录" className={"plain-button "+(history?"pressed":"")} onClick={()=>setHistory(!history)}><History size={16}/><span>版本记录</span></button>
-        {vid&&<a className="export-button" href={"/api/v1/projects/"+pid+"/versions/"+vid+"/export"}><Download size={15}/><span>导出源码</span></a>}
-        {vid&&(project?.kind==="web"||project?.kind==="game")&&<PublishButton pid={pid} versionId={vid} versionNumber={version?.number} readOnly={cap?.read_only}/>}
+        {vid&&!showRetainedDraft&&<a className="export-button" href={"/api/v1/projects/"+pid+"/versions/"+vid+"/export"}><Download size={15}/><span>导出源码</span></a>}
+        {vid&&!showRetainedDraft&&(project?.kind==="web"||project?.kind==="game")&&<PublishButton pid={pid} versionId={vid} versionNumber={version?.number} readOnly={cap?.read_only}/>}
       </div>
     </header>
     <div className="mobile-work-tabs"><button className={mobileView==="chat"?"selected":""} onClick={()=>setMobileView("chat")}>对话</button><button className={mobileView==="preview"?"selected":""} onClick={()=>setMobileView("preview")}>应用</button></div>
@@ -258,11 +276,12 @@ function Workspace(){
         const originalPrompt=()=>message.run_prompt||messages.items.find(item=>item.role==="user"&&item.run_id===message.run_id)?.content||"";
         return <article key={message.id} className={"message "+message.role}>
           <div className="message-label">{assistant?<><Sparkles size={13}/>构建助手</>:<><span className="small-avatar">你</span>{message.retry_of_run_id?"继续构建":"你的需求"}</>}<time>{date(message.created_at)}</time></div>
-          {failed && recoveredRuns.has(message.run_id) ? <div className="message-content">这次构建已修复。</div>
+          {failed && recoveredRuns.has(message.run_id) ? <div className="message-content">{message.run_error_code==="USER_STOPPED"?"这次构建已继续并完成。":"这次构建已修复。"}</div>
           : failed ? <BuildFailure message={message} hasVersion={!!project?.current_version_id}
             stale={(message.run_base_version_id??null)!==(project?.current_version_id??null)}
             disabled={busy||savingSource||!!cap?.read_only||!cap?.model_configured||!cap?.worker_available||(!message.has_candidate&&(wallet?.available_units??0)<100)}
             sending={sending} onRetry={()=>void sendRun(originalPrompt(),message.run_id)}
+            onPreview={retainedPreview&&runId===message.run_id?()=>{setSelected(null);setSelectedDraft(runId);switchTab("preview")}:undefined}
             onEdit={()=>{setPrompt(originalPrompt());document.getElementById("chat-prompt")?.focus()}}/>
           : <div className="message-content">{message.content}</div>}
           {result && <div className="version-result-card">
@@ -276,7 +295,18 @@ function Workspace(){
         onPreview={draftPreview?()=>switchTab("preview"):undefined}/>
       <div ref={bottom}/></div>
       <div className="chat-compose-area">{wallet&&wallet.available_units<100&&<div className="capability-warning">可用积分不足；已有预览、版本和导出仍可使用。</div>}{!cap?.model_configured&&<div className="capability-warning"><AlertCircle size={15}/><span>模型待配置，连接后即可生成应用。</span></div>}{cap?.read_only&&<div className="capability-warning">系统维护中，当前只读。</div>}{error&&<div className="inline-error" role="alert">{error}<button aria-label="关闭错误" onClick={()=>setError("")}><X size={13}/></button></div>}
-      <form className="chat-composer" onSubmit={submit}><label className="sr-only" htmlFor="chat-prompt">描述需求或修改</label><textarea id="chat-prompt" placeholder={project?.current_version_id?"描述下一步修改…":"详细描述你想创建的应用…"} maxLength={100000} value={prompt} onChange={e=>setPrompt(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&(e.ctrlKey||e.metaKey)){e.preventDefault();e.currentTarget.form?.requestSubmit()}}}/><div><span>{busy?"构建期间可以离开此页面":project?.current_version_id?"基于当前版本继续构建":"准备好，就开始吧"}{!busy&&prompt.length>0&&<span className="prompt-length">{prompt.length} / 100000 字</span>}</span><button aria-label="提交需求" disabled={!prompt.trim()||sending||busy||savingSource||(wallet?.available_units??0)<100||!cap?.model_configured||!cap?.worker_available||cap?.read_only}>{sending?<LoaderCircle size={16} className="spin"/>:<ArrowUp size={18}/>}</button></div></form><p className="chat-footnote">Ctrl / ⌘ + Enter 发送 · AI 生成结果请实际验证</p></div></section>
+      <form className="chat-composer" onSubmit={submit}>
+        <label className="sr-only" htmlFor="chat-prompt">描述需求或修改</label>
+        <textarea id="chat-prompt" placeholder={project?.current_version_id?"描述下一步修改…":"详细描述你想创建的应用…"} maxLength={100000} value={prompt} onChange={e=>setPrompt(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&(e.ctrlKey||e.metaKey)){e.preventDefault();e.currentTarget.form?.requestSubmit()}}}/>
+        <div>
+          <span>{busy?(stopping?"正在停止构建…":"构建期间可以离开此页面"):project?.current_version_id?"基于当前版本继续构建":"准备好，就开始吧"}{!busy&&prompt.length>0&&<span className="prompt-length">{prompt.length} / 100000 字</span>}</span>
+          {busy?<button type="button" className="stop-build-button" aria-label="停止构建" title="停止当前项目的构建" disabled={stopping} onClick={()=>void stopRun()}>
+            {stopping?<LoaderCircle size={16} className="spin" aria-hidden="true"/>:<Square size={12} fill="currentColor" aria-hidden="true"/>}
+          </button>:<button type="submit" aria-label="提交需求" disabled={!prompt.trim()||sending||savingSource||(wallet?.available_units??0)<100||!cap?.model_configured||!cap?.worker_available||cap?.read_only}>
+            {sending?<LoaderCircle size={16} className="spin"/>:<ArrowUp size={18}/>}
+          </button>}
+        </div>
+      </form><p className="chat-footnote">Ctrl / ⌘ + Enter 发送 · AI 生成结果请实际验证</p></div></section>
       <section className="build-panel" onKeyDown={event=>{
         if(displayTab==="code"&&(event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==="s"){
           event.preventDefault();
@@ -289,6 +319,7 @@ function Workspace(){
         </div>
         <div className="preview-controls">
           {showingDraft?<span className="draft-indicator">本次构建</span>:version&&<button className="version-chip" onClick={()=>setHistory(!history)}>v{version.number}<ChevronDown size={12}/></button>}
+          {showRetainedDraft&&vid&&<button className="version-chip" onClick={()=>showVersion(vid)}>回到当前版本</button>}
           <span className="toolbar-divider"/>
           <button className={"icon-button "+(!phone?"selected":"")} title="桌面预览" aria-label="桌面预览" disabled={!canPreview||displayTab==="code"} onClick={()=>setPhone(false)}><Monitor size={16}/></button>
           <button className={"icon-button "+(phone?"selected":"")} title="手机预览" aria-label="手机预览" disabled={!canPreview||displayTab==="code"} onClick={()=>setPhone(true)}><Smartphone size={16}/></button>
@@ -318,7 +349,7 @@ function Workspace(){
         {displayTab==="code"&&files?<Suspense fallback={<div className="preview-loading">正在加载代码编辑器…</div>}>
           <Code files={files} edits={currentEdits} editable={editableSource&&!savingSource} onEdit={editSource}/>
         </Suspense>
-          :draftPreview&&runId?<Preview key={runId} pid={pid} runId={runId} reload={reload} phone={phone} onSaved={setSaved}/>
+          :draftPreview&&runId?<Preview key={runId+":"+(run?.workspace?.preview_digest??"")} pid={pid} runId={runId} reload={reload} phone={phone} onSaved={setSaved}/>
           :vid&&version?.artifact?<Preview key={vid} pid={pid} vid={vid} reload={reload} phone={phone} onSaved={setSaved}/>
           :<div className="workspace-empty">
             {busy||vid&&versionPending?<LoaderCircle className="spin" size={22}/>:<Code2 size={23}/>}
@@ -329,7 +360,7 @@ function Workspace(){
       </div>
       <div className="preview-statusbar">
         <span><span className={"status-dot "+(saved==="未保存"&&!showingDraft?"red":"")}/>
-          {showingDraft?(displayTab==="code"?(busy?"构建源码 · 只读":"未发布源码 · 只读"):"临时预览 · 操作不保存")
+          {showingDraft?(displayTab==="code"?(busy?"构建源码 · 只读":"未发布源码 · 只读"):showRetainedDraft?(userStopped?"临时预览 · 已停止 · 操作不保存":"临时预览 · 待通过验收 · 操作不保存"):"临时预览 · 操作不保存")
             :historical?"历史版本 · 只读":displayTab==="code"?(editableSource?"当前版本源码":"版本源码 · 只读"):canPreview?saved:busy?"正在构建":"暂无预览"}</span>
         {(source||version?.artifact)&&<span>{!showingDraft&&version?"v"+version.number+" · ":""}{(source?.schema_version??version?.artifact?.schema_version)==="2"?"React / TypeScript":"HTML / CSS / JavaScript"}</span>}
       </div>

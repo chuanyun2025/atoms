@@ -3,8 +3,10 @@ import {readFileSync} from "node:fs";
 import {posix} from "node:path";
 import {fileURLToPath} from "node:url";
 import {Ajv2020} from "ajv/dist/2020.js";
-import {build,type Loader,type Plugin} from "esbuild";
+import {build,type BuildFailure,type Loader,type Plugin} from "esbuild";
 import {compile,type Compiled} from "./compiler.js";
+import {ValidationDiagnostic} from "./diagnostic.js";
+import {checkSandboxContract} from "./sandbox-contract.js";
 
 type ReactArtifact = {schema_version:"2";title:string;summary:string;files:Record<string,string>};
 const schema = JSON.parse(readFileSync(new URL("../../../shared/contracts/react-artifact.schema.json",import.meta.url),"utf8"));
@@ -30,7 +32,7 @@ function sourceModules(files:Record<string,string>):Plugin {
       );
       bundle.onResolve({filter:/.*/,namespace:"atoms-source"}, args => {
         if (args.kind !== "import-statement") {
-          return {errors:[{text:"源码只支持静态 import"}]};
+          return {errors:[{text:"源码只支持静态 import",detail:{code:"COMPILE_IMPORT",subject:args.kind}}]};
         }
         if (dependencies.has(args.path)) return {path:fileURLToPath(import.meta.resolve(args.path))};
         if (args.path.startsWith("./") || args.path.startsWith("../")) {
@@ -42,7 +44,8 @@ function sourceModules(files:Record<string,string>):Plugin {
           );
           if (found) return {path:found,namespace:"atoms-source"};
         }
-        return {errors:[{text:"无法导入 "+JSON.stringify(args.path)+"。可用 React、Three.js 与项目 src 内的 TSX、TS、JSON 文件"}]};
+        return {errors:[{text:"无法导入 "+JSON.stringify(args.path)+"。可用 React、Three.js 与项目 src 内的 TSX、TS、JSON 文件",
+          detail:{code:"COMPILE_IMPORT",subject:args.path}}]};
       });
       bundle.onLoad({filter:/.*/,namespace:"atoms-styles"}, () => ({contents:"",loader:"js"}));
       bundle.onLoad({filter:/.*/,namespace:"atoms-source"}, args => ({
@@ -60,15 +63,16 @@ export async function compileReact(input:unknown):Promise<Compiled> {
       issue.keyword==="required"?issue.params.missingProperty:"",
       issue.keyword==="additionalProperties"?issue.params.additionalProperty:"",
     ].filter(Boolean).join(" "));
-    throw new Error("React 产物不符合约定："+details?.join("；"));
+    throw new ValidationDiagnostic("ARTIFACT_SCHEMA_INVALID","React 产物不符合约定："+details?.join("；"),
+      {subject:details?.slice().sort().join("；")});
   }
   let total=0;
   for (const source of Object.values(input.files)) {
     const size=Buffer.byteLength(source);
-    if (size>4*1024*1024) throw new Error("单文件超过 4 MiB 资源保护");
+    if (size>4*1024*1024) throw new ValidationDiagnostic("ARTIFACT_LIMIT","单文件超过 4 MiB 资源保护");
     total+=size;
   }
-  if (total>8*1024*1024) throw new Error("源码总大小超过 8 MiB 资源保护");
+  if (total>8*1024*1024) throw new ValidationDiagnostic("ARTIFACT_LIMIT","源码总大小超过 8 MiB 资源保护");
 
   const bundle=await build({
     entryPoints:["atoms-entry"],
@@ -76,6 +80,7 @@ export async function compileReact(input:unknown):Promise<Compiled> {
     tsconfigRaw:{compilerOptions:{}},
     jsx:"automatic",
     bundle:true,
+    metafile:true,
     platform:"browser",
     format:"iife",
     target:"es2022",
@@ -83,11 +88,30 @@ export async function compileReact(input:unknown):Promise<Compiled> {
     minify:true,
     write:false,
     logLevel:"silent",
+  }).catch((error:BuildFailure) => {
+    const issue = error.errors?.[0];
+    if (!issue) throw error;
+    const location = issue.location;
+    const file = location?.file.replace(/^atoms-source:/, "");
+    const details = issue.detail as {code?:string; subject?:string} | undefined;
+    throw new ValidationDiagnostic(details?.code ?? "COMPILE_ERROR", issue.text, {
+      file:file === entryPath ? "src/App.tsx" : file, line:location?.line,
+      column:location ? location.column + 1 : undefined,
+      subject:details?.subject ?? [issue.text,location?.lineText.trim()].filter(Boolean).join(" "),
+    });
   });
   const compiled=compile({
     schema_version:"1",title:input.title,summary:input.summary,
     files:{"index.html":'<div id="root"></div>',"styles.css":input.files["src/styles.css"],"app.js":bundle.outputFiles[0].text},
   });
+  const executableFiles=new Set<string>();
+  const prefix="atoms-source:";
+  for (const output of Object.values(bundle.metafile.outputs)) {
+    for (const [path, contribution] of Object.entries(output.inputs)) {
+      if (path.startsWith(prefix) && contribution.bytesInOutput>0) executableFiles.add(path.slice(prefix.length));
+    }
+  }
+  checkSandboxContract(input.files,executableFiles);
   return {
     ...compiled,
     digest:createHash("sha256").update(JSON.stringify({artifact:input,bundle:compiled.digest,compiler_version:"2"})).digest("hex"),

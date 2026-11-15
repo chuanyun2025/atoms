@@ -5,22 +5,65 @@ from .db import compact
 from .website_starters import COPY_SLOT
 
 
-def test_decision(role, context):
-    if role=="planner":
-        game=context.get("project_kind")=="game"
-        fps=context.get("fps_required",False)
-        return compact({
-            "experience":"first_person_3d" if fps else "other_game" if game else "website",
-            "rendering":"threejs" if fps else "dom",
-            "requirements":["保留原始需求","实现可以操作的界面"],
-            "visual_direction":"按需求组织有主次的视觉与反馈",
-            "specialist_brief":context["request"],
-            "acceptance":["页面可启动","核心交互有效"],
-        })
-    source=context["artifact"]["files"].get("src/App.tsx","")
-    excerpt = "const coreScore = 0;"
-    findings = [{"path":"src/App.tsx","excerpt":excerpt,"problem":"收集后 HUD 仍显示固定的零分。"}] if excerpt in source else []
-    return compact({"accepted":not findings,"findings":findings})
+def test_plan(context):
+    game=context.get("project_kind")=="game"
+    fps=context.get("fps_required",False)
+    plan={
+        "experience":"first_person_3d" if fps else "other_game" if game else "website",
+        "rendering":"threejs" if fps else "dom",
+        "requirements":["保留原始需求","实现可以操作的界面"],
+        "visual_direction":"按需求组织有主次的视觉与反馈",
+        "specialist_brief":context["request"],
+    }
+    if game:
+        genre=context.get("game_genre_hint")
+        plan["game_genre"]=genre
+        plan["mechanics"]=context.get("base_mechanics") or _test_mechanics(genre)
+    return compact(plan)
+
+
+def _test_mechanics(genre):
+    if genre=="tile_merge":
+        return {
+            "initial_state":"4×4 棋盘有两个数字块，得分为 0。",
+            "actions":[{
+                "input":"方向键或四个方向按钮","when":"本局仍在进行",
+                "effects":["沿输入方向压缩并合并，按读取时的索引写回。","更新得分，有效移动后在空格生成新块。"],
+            }],
+            "invariants":["每次移动最多合并每个方块一次。","无效移动不加分也不生成新块。"],
+            "end_condition":"棋盘无空位，横竖无相同邻格。",
+            "restart":"重新生成棋盘并归零本局得分。",
+            "examples":[
+                {"setup":"一行为 [2,2,0,0]","action":"向右","expected":"生成新块前 [0,0,0,4]，加 4 分。"},
+                {"setup":"一列从上到下为 [2,0,2,0]","action":"向下","expected":"生成新块前 [0,0,0,4]，加 4 分。"},
+            ],
+        }
+    if genre in {"platformer","arcade_platformer"}:
+        return {
+            "initial_state":"角色在出生点，脚底贴在起跳平台顶面。",
+            "actions":[{
+                "input":"按右方向并跳跃","when":"角色已在平台上落地",
+                "effects":["按实际速度和重力更新位置。","下降时脚底跨过平台顶面且横向重叠时落地。"],
+            }],
+            "invariants":["只用实际碰撞面判断落地。"],
+            "end_condition":"抵达出口后完成关卡。",
+            "restart":"回到本关出生点并恢复本局状态。",
+            "examples":[
+                {"setup":"站在出生平台左边，右前方为第一处必经平台。","action":"沿右方向起跳","expected":"下降时脚底落在第一处平台实际顶面，角色可以继续走。"},
+                {"setup":"角色在第一处平台边缘。","action":"走出平台并坠落","expected":"角色回到最近的有效重生点。"},
+            ],
+        }
+    return {
+        "initial_state":"进入第一回合，进度和分数为 0。",
+        "actions":[{"input":"执行主操作","when":"游戏处于进行中","effects":["更新进度","显示本次操作结果"]}],
+        "invariants":["一次有效输入只结算一次。"],
+        "end_condition":"完成当前目标。",
+        "restart":"恢复初始回合。",
+        "examples":[
+            {"setup":"刚开始且进度为 0","action":"执行一次有效操作","expected":"进度增加一次。"},
+            {"setup":"已有进度","action":"重新开始","expected":"进度回到 0。"},
+        ],
+    }
 
 
 def slides_artifact(broken: bool):
@@ -48,8 +91,9 @@ document.addEventListener('keydown', event => {
   if (event.key === 'End') show(pages.length - 1);
 });
 show(0);"""
-    if not broken:
-        script += "\nnext.addEventListener('click', () => show(index + 1));"
+    script += "\nnext.addEventListener('click', () => show(index + 1));"
+    if broken:
+        script += '\nthrow new Error("幻灯片启动异常");'
     return compact({
         "schema_version":"1", "title":"测试网页幻灯片", "summary":"用两页验证翻页交互。",
         "files":{"index.html":html,"styles.css":"main{padding:2rem}nav{display:flex;gap:1rem}","app.js":script},
@@ -158,8 +202,13 @@ def test_artifact(context,repair):
         return '{"bad":"artifact"}'
     if "[resume]" in prompt and not context.get("continuing_failed_build"):
         return '{"bad":"resume-fixture"}'
-    if "[repair-loop]" in prompt and (repair or {}).get("round",0)<3:
-        return compact({"bad":"multi-round-fixture","round":(repair or {}).get("round",0)})
+    round_number=(repair or {}).get("round",0)
+    repeat_root="[repeat-root]" in prompt
+    if repeat_root or ("[repair-loop]" in prompt and round_number<10):
+        missing="same-module" if repeat_root else "module-"+str(round_number)
+        app="\n"*round_number+f'import "./{missing}";\nexport default function App(){{return <main>测试</main>}}'
+        return compact({"schema_version":"2","title":"构建修复测试","summary":"编译错误测试",
+                        "files":{"src/App.tsx":app,"src/styles.css":"body{margin:0}","src/helper.ts":"export {}"}})
     if "[repair]" in prompt and not repair:
         return "invalid json"
     if context.get("slide_template"):
@@ -187,13 +236,6 @@ def test_artifact(context,repair):
             else:
                 app = app.replace("()=>setGame(collect)", '()=>{throw new Error("收集操作异常")}')
             artifact["files"]["src/App.tsx"] = app
-            return compact(artifact)
-        if "[review-repair]" in prompt and (not repair or "[repeat-review]" in prompt):
-            import json
-            artifact = json.loads(game)
-            artifact["files"]["src/App.tsx"] = artifact["files"]["src/App.tsx"].replace(
-                "  return <main", "  const coreScore = 0;\n  return <main"
-            ).replace("<GameHud score={game.actions}", "<GameHud score={coreScore}")
             return compact(artifact)
         return game
     if context.get("website_starter"):

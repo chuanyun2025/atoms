@@ -1,21 +1,18 @@
 import {test,expect} from "@playwright/test";
 
-test("构建时显示计划、源码和临时预览，交付后切到正式版本",async({page})=>{
+test("构建时显示计划，交付后可查看正式预览与源码",async({page})=>{
   await page.goto("/games");
-  await page.getByLabel("描述应用需求").fill("[slow-review] 做一个收集晶体的游戏");
+  await page.getByLabel("描述应用需求").fill("[slow-build] 做一个收集晶体的游戏");
   await page.getByRole("button",{name:"开始创建",exact:true}).click();
   const progress=page.getByRole("region",{name:"构建进度"});
   await expect(progress).toContainText("实现可以操作的界面");
   const preview=page.frameLocator('iframe[title="应用预览"]');
-  await expect(page.getByText("临时预览 · 操作不保存")).toBeVisible();
+  await expect(page.getByRole("button",{name:"查看版本 v1 预览",exact:true})).toBeVisible();
   await expect(preview.getByRole("heading",{name:"晶体航线"})).toBeVisible();
   await page.getByRole("button",{name:"代码",exact:true}).click();
-  await expect(page.getByText("构建源码 · 只读")).toBeVisible();
+  await page.getByRole("button",{name:"App.tsx",exact:true}).click();
   await expect(page.locator(".cm-content")).toContainText("GameHud");
   await page.getByRole("button",{name:"预览",exact:true}).click();
-  await expect(preview.getByRole("button",{name:"开始游戏"})).toBeVisible();
-  await expect(page.getByRole("button",{name:"查看版本 v1 预览",exact:true})).toBeVisible();
-  await expect(page.getByText("临时预览 · 操作不保存")).toHaveCount(0);
   await expect(preview.getByRole("button",{name:"开始游戏"})).toBeVisible();
 });
 
@@ -95,7 +92,7 @@ test("生成、持久化、失败恢复、历史分支与导出",async({page,bro
   await expect(page.getByRole("button",{name:"v4",exact:true})).toBeVisible();
   await expect(preview.getByRole("button",{name:"增加两次"})).toBeVisible();
   await page.getByRole("button",{name:"积分余额",exact:true}).filter({visible:true}).click();
-  await expect(page.getByTestId("wallet-available")).toHaveText("499.328000");
+  await expect(page.getByTestId("wallet-available")).toHaveText("499.272000");
   await page.screenshot({path:"test-results/wallet-desktop.png",fullPage:true});
   await page.getByRole("button",{name:"关闭",exact:true}).click();
   const downloadEvent=page.waitForEvent("download");

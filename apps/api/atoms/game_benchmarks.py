@@ -2,8 +2,9 @@
 
 import re
 from typing import Literal
+from unicodedata import normalize
 
-GameGenre = Literal["fps", "arcade_platformer", "platformer", "match3", "tower_defense", "racing", "falling_blocks", "puzzle", "strategy", "survival",
+GameGenre = Literal["fps", "arcade_platformer", "platformer", "tile_merge", "match3", "tower_defense", "racing", "falling_blocks", "puzzle", "strategy", "survival",
                     "fighting", "role_playing", "sports", "simulation", "roguelike", "rhythm", "card", "sandbox", "other"]
 
 BENCHMARKS = {
@@ -64,6 +65,7 @@ BENCHMARKS = {
 SPECIFIC_GENRE_PATTERNS = {
     "arcade_platformer": r"雪人兄弟|泡泡龙(?:街机|闯关)|固定(?:屏|画面).{0,10}(?:平台|清怪|清场)|\bsnow\s*bros\b|\bbubble\s+bobble\b|\b(?:fixed|single)[ -]screen (?:arcade )?platformer\b",
     "match3": r"三消|三连消除|连成三个|宝石迷阵|消消乐|\bmatch[ -]?(?:3|three)\b|\bbejeweled\b|\bcandy crush\b",
+    "tile_merge": r"(?<![a-z0-9])2048(?![a-z0-9]|\s*(?:[x×*]\s*\d|px\b|像素|分辨率|分|金币|关|年))|数字滑块|数字合并(?:游戏|方块)|滑动合并方块",
     "tower_defense": r"塔防|植物大战僵尸|保卫萝卜|\btower[ -]defen[cs]e\b|\bplants vs\.? zombies\b",
 }
 
@@ -85,9 +87,39 @@ GENRE_PATTERNS = {
 }
 
 
+_NEGATED_GENRE=re.compile(
+    r"(?:不要|(?<![特区差分性个告])别|不想|不希望|不需要|不做|不搞|不使用|不用|不是|避免|排除|非|\b(?:not|no|without|avoid|don['’]t)\b)"
+    r"\s*(?:(?:做成?|制作|生成|开发|选择|类似|像|make|build|create|use)\s*)?"
+    r"(?:(?:一个|一款|这种|那种|a\b|an\b)\s*)?[“‘'\"《「]?$",
+    re.I,
+)
+_ALTERNATIVE=re.compile(r"\s*(?:、|[/／]|或者|或是|或|以及|和|及|与|or|and|那种)\s*",re.I)
+
+
+def genre_preferences(request: str) -> tuple[GameGenre | None, set[GameGenre]]:
+    request=normalize("NFKC",request)
+    mentions=sorted(
+        (match.start(),match.end(),genre)
+        for genre,pattern in (SPECIFIC_GENRE_PATTERNS | GENRE_PATTERNS).items()
+        for match in re.finditer(pattern,request,re.I)
+    )
+    choices={}
+    previous_end=0
+    previous_negated=False
+    for start,end,genre in mentions:
+        between=request[previous_end:start] if start>=previous_end else ""
+        negated=bool(_NEGATED_GENRE.search(request[max(0,start-64):start])) or (
+            previous_negated and bool(_ALTERNATIVE.fullmatch(between))
+        )
+        choices[genre]=negated
+        if end>previous_end:
+            previous_end=end
+            previous_negated=negated
+    excluded={genre for genre,negated in choices.items() if negated}
+    positive=[genre for genre,negated in choices.items() if not negated]
+    matches=[genre for genre in positive if genre in SPECIFIC_GENRE_PATTERNS] or positive
+    return (matches[0] if len(matches)==1 else None),excluded
+
+
 def match_genre(request: str) -> GameGenre | None:
-    specific = [genre for genre, pattern in SPECIFIC_GENRE_PATTERNS.items() if re.search(pattern, request, re.I)]
-    if specific:
-        return specific[0] if len(specific) == 1 else None
-    matches = [genre for genre, pattern in GENRE_PATTERNS.items() if re.search(pattern, request, re.I)]
-    return matches[0] if len(matches) == 1 else None
+    return genre_preferences(request)[0]
