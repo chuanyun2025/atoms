@@ -188,7 +188,7 @@ def plan_messages(context: dict) -> list[dict]:
         genre=context.get("game_genre_hint") or match_genre(context.get("request",""))
         instructions += "\n\n"+game_mechanics_skill(genre)
     if context.get("project_kind") == "web":
-        instructions += "\n网站实现会加载 Frontend Design。根据站点主题、受众和首要操作，确定首屏焦点和视觉方向。"
+        instructions += "\n网站实现会加载 Frontend Design。根据站点主题、受众和首要操作，确定首屏焦点和视觉方向。如有 website_starter_summary，说明生成阶段会参考对应模板结构，可结合模板板块与本次需求规划。"
     return [
         {"role":"system", "content":instructions+"\nJSON Schema\n"+compact(plan_contract(context).model_json_schema())},
         {"role":"user", "content":compact(context)},

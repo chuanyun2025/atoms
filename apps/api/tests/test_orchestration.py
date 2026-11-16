@@ -253,7 +253,8 @@ def test_game_research_and_template_reach_the_generation_pipeline(client, monkey
     async def generate(run, context, repair, **kwargs):
         assert context["task_plan"]["game_genre"] == genre
         assert context["task_plan"]["rendering"] == "canvas2d"
-        assert "web-artifacts-builder" in kwargs["skill"].instructions
+        assert "# 2D 游戏制作指导" in kwargs["skill"].instructions
+        assert "web-artifacts-builder" not in kwargs["skill"].instructions
         assert context["game_research"] == research
         assert context["game_profile"] == game_profile(genre)
         assert not context["fps_required"]

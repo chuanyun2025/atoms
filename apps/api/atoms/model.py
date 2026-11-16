@@ -76,6 +76,9 @@ async def generate(prepared,output_tokens, *, run_id=None):
         path = Path(__file__).resolve().parents[3] / "shared" / "contracts" / (name.replace("_", "-") + ".schema.json")
         schema = json.loads(path.read_text("utf-8"))
         schema.pop("$schema", None)
+        if prepared.react_site:
+            # Model output only requires App.tsx + styles.css; worker.py injects src/agent/plan.json before validator checks minProperties=3.
+            schema["properties"]["files"]["minProperties"] = 2
     async with ProviderClient() as provider:
         return await provider.generate(prepared.messages, output_tokens, {"name":name,"schema":schema},
                                        run_id=run_id, timeout_seconds=prepared.timeout_seconds)

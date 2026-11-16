@@ -551,6 +551,11 @@ async def execute_run(run, *, validator_slot=None):
     if coordinated and plan is None:
         await asyncio.to_thread(stage,rid,token,"planning","主 Agent 解析目标并规划实现")
         planning_context={name:value for name,value in context.items() if name not in ("website_starter","starter_media_keys")}
+        if website_starter:
+            planning_context["website_starter_summary"]={
+                "id":website_starter["id"],
+                "files":sorted(website_starter.get("files",{})),
+            }
         if context["project_kind"]=="game":
             planning_context["game_dimension"]=dimension
             planning_context["game_benchmarks"]={genre:BENCHMARKS[genre]} if genre in BENCHMARKS else {}

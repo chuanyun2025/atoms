@@ -129,3 +129,32 @@ def test_model_gets_editable_template_sources_only_when_matched(client, monkeypa
     monkeypatch.setattr(worker, "paid_generate", generated)
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: original(transport=httpx.MockTransport(validate)))
     asyncio.run(worker.execute_run(run))
+
+
+def test_planner_receives_website_starter_summary_without_full_source(client, monkeypatch):
+    from atoms.model_fixture import test_plan
+    from atoms.orchestration import parse_plan, plan_messages
+
+    project = create_project(client)
+    assert submit(client, project["id"], "做一个个人作品集").status_code == 202
+    run = worker.claim("test-leader")
+    seen_contexts = []
+
+    async def capture_plan(run, context):
+        seen_contexts.append(context)
+        sys_msg = plan_messages(context)[0]["content"]
+        assert "website_starter_summary" in sys_msg
+        return parse_plan(json.loads(test_plan(context)), context=context)
+
+    async def generated(run, context, repair, **kwargs):
+        return adapted_website(context["website_starter"])
+
+    original = httpx.AsyncClient
+    monkeypatch.setattr(worker, "agent_plan", capture_plan)
+    monkeypatch.setattr(worker, "paid_generate", generated)
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: original(transport=httpx.MockTransport(lambda req: httpx.Response(200, json=VALIDATION))))
+    asyncio.run(worker.execute_run(run))
+    assert len(seen_contexts) == 1
+    assert "website_starter" not in seen_contexts[0]
+    assert seen_contexts[0]["website_starter_summary"]["id"] == "portfolio"
+    assert "src/App.tsx" in seen_contexts[0]["website_starter_summary"]["files"]
