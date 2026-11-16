@@ -6,6 +6,7 @@ from html import unescape
 import json
 import re
 from time import monotonic
+from weakref import WeakKeyDictionary
 
 import httpx
 
@@ -22,6 +23,7 @@ _TAG = {
 }
 _GENRE_ID = {"racing": "9", "sports": "18", "strategy": "2", "role_playing": "3"}
 _cache: dict[str, tuple[float, dict]] = {}
+_locks: WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Lock]] = WeakKeyDictionary()
 
 
 async def _json(client: httpx.AsyncClient, path: str, params: dict):
@@ -60,20 +62,25 @@ async def find_game_references(genre: str) -> dict:
     cached = _cache.get(genre)
     if cached and cached[0] > monotonic():
         return cached[1]
-
-    games = []
-    try:
-        async with asyncio.timeout(9), httpx.AsyncClient(timeout=5, trust_env=False, follow_redirects=False) as client:
-            query = {"tags": _TAG[genre], "category1": 998, "filter": "topsellers", "count": 16,
-                     "infinite": 1, "l": "english", "cc": "us"}
-            page = await _json(client, "/search/results/", query)
-            ids = list(dict.fromkeys(re.findall(r'data-ds-itemkey="App_([0-9]{1,10})"', page["results_html"])))
-            details = await asyncio.gather(*(_game(client, app_id, genre) for app_id in ids[:12]))
-            games = [game for game in details if game][:4]
-    except (httpx.HTTPError, ValueError, TypeError, AttributeError, KeyError, TimeoutError):
-        pass
-    result = {"status": "live" if games else "fallback", "genre": genre, "games": games,
-              "source": f"{STORE}/search/?tags={_TAG[genre]}&filter=topsellers",
-              "checked_at": datetime.now(UTC).isoformat()}
-    _cache[genre] = (monotonic() + (600 if games else 45), result)
-    return result
+    loop_locks = _locks.setdefault(asyncio.get_running_loop(), {})
+    lock = loop_locks.setdefault(genre, asyncio.Lock())
+    async with lock:
+        cached = _cache.get(genre)
+        if cached and cached[0] > monotonic():
+            return cached[1]
+        games = []
+        try:
+            async with asyncio.timeout(9), httpx.AsyncClient(timeout=5, trust_env=False, follow_redirects=False) as client:
+                query = {"tags": _TAG[genre], "category1": 998, "filter": "topsellers", "count": 16,
+                         "infinite": 1, "l": "english", "cc": "us"}
+                page = await _json(client, "/search/results/", query)
+                ids = list(dict.fromkeys(re.findall(r'data-ds-itemkey="App_([0-9]{1,10})"', page["results_html"])))
+                details = await asyncio.gather(*(_game(client, app_id, genre) for app_id in ids[:12]))
+                games = [game for game in details if game][:4]
+        except (httpx.HTTPError, ValueError, TypeError, AttributeError, KeyError, TimeoutError):
+            pass
+        result = {"status": "live" if games else "fallback", "genre": genre, "games": games,
+                  "source": f"{STORE}/search/?tags={_TAG[genre]}&filter=topsellers",
+                  "checked_at": datetime.now(UTC).isoformat()}
+        _cache[genre] = (monotonic() + (600 if games else 45), result)
+        return result

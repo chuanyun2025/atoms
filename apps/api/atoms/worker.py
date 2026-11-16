@@ -60,15 +60,28 @@ def fail_locked(conn,run,status,code,message):
 
 def recover_expired():
     now=time.time()
+    cfg=settings()
+    deadline=now-cfg.run_timeout_seconds
+    pending_deadline=now-cfg.pending_timeout_seconds
+    with transaction() as conn:
+        has_running=one(conn,"SELECT 1 FROM runs WHERE status='running' AND (lease_until<:now OR started_at<:deadline) LIMIT 1",
+                        now=now,deadline=deadline)
+        has_pending=None if has_running else one(conn,"SELECT 1 FROM runs WHERE status='pending' AND created_at<:pending LIMIT 1",
+                                               pending=pending_deadline)
+        if not has_running and not has_pending:
+            return
     with transaction(True) as conn:
-        rows=all_rows(conn,"SELECT * FROM runs WHERE (status='running' AND (lease_until<:now OR started_at<:deadline)) OR (status='pending' AND created_at<:pending)",now=now,deadline=now-settings().run_timeout_seconds,pending=now-settings().pending_timeout_seconds)
+        rows=all_rows(conn,"""SELECT * FROM runs WHERE status='running' AND (lease_until<:now OR started_at<:deadline)
+            UNION ALL SELECT * FROM runs WHERE status='pending' AND created_at<:pending""",
+            now=now,deadline=deadline,pending=pending_deadline)
         for row in rows:
             if row["status"]=="pending":
                 fail_locked(conn,row,"failed","QUEUE_TIMEOUT","排队超时，生成服务未领取任务，请重新生成")
                 continue
-            timeout=row["started_at"]<now-settings().run_timeout_seconds
+            timeout=row["started_at"]<deadline
             fail_locked(conn,row,"failed" if timeout else "interrupted","TIMEOUT" if timeout else "WORKER_LOST",
                         "任务超过时限，请重试；上一可用版本已保留" if timeout else "生成服务已中断，请重试；上一可用版本已保留")
+        execute(conn,"DELETE FROM quota_windows WHERE expires_at<=:now",now=now)
 
 
 def acquire_leader(token):

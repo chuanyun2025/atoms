@@ -16,6 +16,7 @@ class ProviderSettings(BaseSettings):
     llm_token_limit_param: str = "max_tokens"
     llm_provider_max_output_tokens: int = Field(default=393216, gt=0)
     llm_request_timeout_seconds: int = Field(default=1500, gt=0)
+    llm_stream: bool = False
     vidu_api_key: SecretStr = SecretStr("")
     vidu_base_url: str = "https://api.vidu.cn"
     vidu_model: str = Field(default="viduq3-pro", pattern=r"^[A-Za-z0-9._-]{1,128}$")

@@ -62,9 +62,10 @@ def transactions(conn,visitor_id,before=None):
     return {"items":rows,"pending":pending,"next_before":rows[-1]["created_at"] if len(rows)==50 else None}
 
 
-def require_balance(conn,visitor_id):
+def require_balance(conn,visitor_id,prompt_bytes:int=0):
     balance=wallet(conn,visitor_id)
-    if balance["available_units"]<INPUT_RATE+OUTPUT_RATE:
+    minimum=max(INPUT_RATE+OUTPUT_RATE, prompt_bytes*INPUT_RATE+OUTPUT_RATE)
+    if balance["available_units"]<minimum:
         raise CreditError("insufficient_credits","可用积分不足，无法继续生成；已有项目仍可查看和导出")
 
 

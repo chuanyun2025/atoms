@@ -20,6 +20,9 @@ x-api: &api
     READ_ONLY_MODE: ${READ_ONLY_MODE:-false}
     RUN_TIMEOUT_SECONDS: ${RUN_TIMEOUT_SECONDS:-3600}
     PENDING_TIMEOUT_SECONDS: ${PENDING_TIMEOUT_SECONDS:-3600}
+    TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-}
+    TRUST_PRIVATE_PROXIES: ${TRUST_PRIVATE_PROXIES:-true}
+    TRUST_CF_CONNECTING_IP: ${TRUST_CF_CONNECTING_IP:-false}
   volumes:
     - app_data:/var/lib/atoms
   networks: [backend]
@@ -80,6 +83,7 @@ services:
       LLM_TOKEN_LIMIT_PARAM: ${LLM_TOKEN_LIMIT_PARAM:-max_tokens}
       LLM_PROVIDER_MAX_OUTPUT_TOKENS: ${LLM_PROVIDER_MAX_OUTPUT_TOKENS:-393216}
       LLM_REQUEST_TIMEOUT_SECONDS: ${LLM_REQUEST_TIMEOUT_SECONDS:-1500}
+      LLM_STREAM: ${LLM_STREAM:-true}
       VIDU_API_KEY: ${VIDU_API_KEY:-}
       VIDU_BASE_URL: ${VIDU_BASE_URL:-https://api.vidu.cn}
       VIDU_MODEL: ${VIDU_MODEL:-viduq3-pro}
@@ -105,7 +109,7 @@ services:
       context: .
       dockerfile: apps/validator/Dockerfile
     environment:
-      APP_ORIGIN: ${APP_ORIGIN:-http://localhost:8080}
+      APP_ORIGIN: ${APP_ORIGIN:?Set public HTTPS APP_ORIGIN}
       SERVICE_TOKEN: ${SERVICE_TOKEN:?Run scripts/init_env.py}
       HOME: /tmp
     init: true
@@ -138,6 +142,8 @@ services:
     depends_on:
       api:
         condition: service_started
+    init: true
+    security_opt: [no-new-privileges:true]
     restart: unless-stopped
 networks:
   backend:

@@ -48,21 +48,85 @@ export default function Preview({pid,vid,exampleId,runId,publication,reload,phon
     let queue=Promise.resolve(),count=0,windowStart=Date.now(),blocked=false;
     const ids=new Set<string>();
     const state=snapshot.current;
+    type BatchEntry={type:"storage.set"|"storage.remove";key:string;value?:unknown;respond:(ok:boolean,error?:string)=>void};
+    let batch:BatchEntry[]=[];
+    let batchTimer:ReturnType<typeof setTimeout>|undefined;
+
+    const flushBatch=()=>{
+      if(batchTimer!==undefined){clearTimeout(batchTimer);batchTimer=undefined}
+      if(!alive()){batch=[];return}
+      if(!batch.length)return;
+      const items=batch;
+      batch=[];
+      queue=queue.then(async()=>{
+        if(!alive())return;
+        const set:Record<string,unknown>={};
+        const remove=new Set<string>();
+        for(const item of items){
+          if(item.type==="storage.set"){
+            set[item.key]=item.value;
+            remove.delete(item.key);
+          }else{
+            delete set[item.key];
+            remove.add(item.key);
+          }
+        }
+        try{
+          const result=await api<State>("/projects/"+pid+"/app-state","PATCH",{
+            expected_revision:state.revision,version_id:vid,set,remove:[...remove],
+          });
+          state.revision=result.revision;state.values=result.values;
+          if(!alive())return;
+          savedRef.current("已保存");
+          for(const item of items)item.respond(true);
+        }catch(e){
+          if(!alive())return;
+          const text=(e as Error).message;
+          savedRef.current("未保存");
+          for(const item of items)item.respond(false,text);
+          setError(text);
+        }
+      });
+    };
+
     channel.port1.onmessage=({data:message}:{data:Message})=>{
       if(!alive()||blocked||!message||message.protocol_version!==1||message.instance_id!==ticket.instance_id||
          typeof message.message_id!=="string"||message.message_id.length>100||ids.has(message.message_id)||
          !message.payload||typeof message.payload!=="object") return;
       if(Date.now()-windowStart>1000){count=0;windowStart=Date.now()}
-      if(++count>100||ids.size>5000){blocked=true;setError("预览发送了过多消息，请重新加载");channel.port1.close();return}
+      if(++count>100||ids.size>5000){blocked=true;clearTimeout(batchTimer);batch=[];setError("预览发送了过多消息，请重新加载");channel.port1.close();return}
       ids.add(message.message_id);
+      const respond=(ok:boolean,error?:string)=>{if(alive())channel.port1.postMessage({instance_id:ticket.instance_id,message_id:message.message_id,ok,error})};
+      if(message.type==="storage.flush"){
+        flushBatch();
+        queue=queue.then(()=>{
+          if(!alive())return;
+          if(blocked)respond(false,"数据尚未保存");
+          else respond(true);
+        });
+        return;
+      }
+      if(!publication&&!exampleId&&!runId&&(message.type==="storage.set"||message.type==="storage.remove")){
+        try{
+          if(JSON.stringify(message).length>40000) throw new Error("数据请求过大");
+          if(ticket.read_only) throw new Error("历史版本为只读，恢复后可以保存业务数据");
+          if(typeof message.payload.key!=="string"||!/^[A-Za-z0-9_.:-]{1,64}$/.test(message.payload.key)||["__proto__","prototype","constructor"].includes(message.payload.key)) throw new Error("存储键无效");
+          savedRef.current("保存中");
+          batch.push({type:message.type,key:message.payload.key,value:message.payload.value,respond});
+          if(batch.length>=32)flushBatch();
+          else if(batchTimer===undefined)batchTimer=setTimeout(flushBatch,16);
+        }catch(e){
+          const text=(e as Error).message;
+          savedRef.current("未保存");respond(false,text);setError(text);
+        }
+        return;
+      }
       queue=queue.then(async()=>{
         if(!alive()) return;
-        const respond=(ok:boolean,error?:string)=>{if(alive())channel.port1.postMessage({instance_id:ticket.instance_id,message_id:message.message_id,ok,error})};
         try{
           if(JSON.stringify(message).length>40000) throw new Error("数据请求过大");
           if(message.type==="runtime.ready"){clearTimeout(timer.current);setReady(true);savedRef.current(ticket.read_only?"历史只读":"已保存");respond(true);return}
           if(message.type==="runtime.error"){setError(String(message.payload.message||"应用运行错误").slice(0,1200));respond(true);return}
-          if(message.type==="storage.flush"){if(blocked)throw new Error("数据尚未保存");respond(true);return}
           if(!["storage.set","storage.remove"].includes(message.type)) throw new Error("不支持的预览消息");
           if(ticket.read_only) throw new Error("历史版本为只读，恢复后可以保存业务数据");
           if(typeof message.payload.key!=="string"||!/^[A-Za-z0-9_.:-]{1,64}$/.test(message.payload.key)||["__proto__","prototype","constructor"].includes(message.payload.key)) throw new Error("存储键无效");
@@ -87,13 +151,6 @@ export default function Preview({pid,vid,exampleId,runId,publication,reload,phon
             if(exampleId) exampleStates.set(exampleId,state);
             savedRef.current("已保存");respond(true);return;
           }
-          const result=await api<State>("/projects/"+pid+"/app-state","PATCH",{
-            expected_revision:state.revision,version_id:vid,set:message.type==="storage.set"?{[message.payload.key]:message.payload.value}:{},
-            remove:message.type==="storage.remove"?[message.payload.key]:[]
-          });
-          state.revision=result.revision;state.values=result.values;
-          if(!alive())return;
-          savedRef.current("已保存");respond(true);
         }catch(e){
           if(!alive())return;
           const text=(e as Error).message;savedRef.current("未保存");respond(false,text);setError(text);

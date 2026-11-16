@@ -29,31 +29,66 @@ function member(node: ts.Node): { base: ts.Expression; name: string } | undefine
   }
 }
 
+const compilerOptions: ts.CompilerOptions = {
+  target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.Preserve, allowJs: true,
+  module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Bundler,
+  lib: ["lib.es2022.d.ts", "lib.dom.d.ts"], types: [],
+};
+const standardHost = ts.createCompilerHost(compilerOptions);
+const libraryDir = dirname(standardHost.getDefaultLibFileName(compilerOptions));
+const isLibrary = (path: string) => dirname(path) === libraryDir && /^lib\.[\w.]+\.d\.ts$/.test(basename(path));
+const sdkSourceFile = ts.createSourceFile(sdkPath, sdkDeclarations, ts.ScriptTarget.ES2022, true);
+const libExistsCache = new Map<string, boolean>();
+const libTextCache = new Map<string, string | undefined>();
+const libFileCache = new Map<string, ts.SourceFile | undefined>();
+let previousProgram: ts.Program | undefined;
+
+function cachedLibExists(path: string) {
+  let exists = libExistsCache.get(path);
+  if (exists === undefined) {
+    exists = standardHost.fileExists(path);
+    libExistsCache.set(path, exists);
+  }
+  return exists;
+}
+
+function cachedLibText(path: string) {
+  if (!libTextCache.has(path)) {
+    libTextCache.set(path, standardHost.readFile(path));
+  }
+  return libTextCache.get(path);
+}
+
+function cachedLibFile(path: string, languageVersion: ts.ScriptTarget | ts.CreateSourceFileOptions) {
+  if (!libFileCache.has(path)) {
+    libFileCache.set(path, standardHost.getSourceFile(path, languageVersion));
+  }
+  return libFileCache.get(path);
+}
+
 function sandboxProgram(sources: Map<string, ts.SourceFile>) {
-  const options: ts.CompilerOptions = {
-    target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.Preserve, allowJs: true,
-    module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Bundler,
-    lib: ["lib.es2022.d.ts", "lib.dom.d.ts"], types: [],
-  };
-  const standardHost = ts.createCompilerHost(options);
-  const libraryDir = dirname(standardHost.getDefaultLibFileName(options));
-  const isLibrary = (path: string) => dirname(path) === libraryDir && /^lib\.[\w.]+\.d\.ts$/.test(basename(path));
-  const sdk = ts.createSourceFile(sdkPath, sdkDeclarations, ts.ScriptTarget.ES2022, true);
   const folders = new Set([sourceRoot]);
   for (const path of sources.keys()) {
     for (let folder = posix.dirname(path); folder.startsWith(sourceRoot); folder = posix.dirname(folder)) {
       folders.add(folder);
     }
   }
-  return ts.createProgram([...sources.keys(), sdkPath], options, {
-    ...standardHost,
-    getCurrentDirectory: () => sourceRoot,
-    directoryExists: path => folders.has(path) || path === libraryDir,
-    fileExists: path => sources.has(path) || path === sdkPath || (isLibrary(path) && standardHost.fileExists(path)),
-    readFile: path => sources.get(path)?.text ?? (path === sdkPath ? sdk.text : isLibrary(path) ? standardHost.readFile(path) : undefined),
-    getSourceFile: (path, languageVersion) => sources.get(path) ?? (path === sdkPath ? sdk :
-      isLibrary(path) ? standardHost.getSourceFile(path, languageVersion) : undefined),
+  const program = ts.createProgram({
+    rootNames: [...sources.keys(), sdkPath],
+    options: compilerOptions,
+    oldProgram: previousProgram,
+    host: {
+      ...standardHost,
+      getCurrentDirectory: () => sourceRoot,
+      directoryExists: path => folders.has(path) || path === libraryDir,
+      fileExists: path => sources.has(path) || path === sdkPath || (isLibrary(path) && cachedLibExists(path)),
+      readFile: path => sources.get(path)?.text ?? (path === sdkPath ? sdkSourceFile.text : isLibrary(path) ? cachedLibText(path) : undefined),
+      getSourceFile: (path, languageVersion) => sources.get(path) ?? (path === sdkPath ? sdkSourceFile :
+        isLibrary(path) ? cachedLibFile(path, languageVersion) : undefined),
+    },
   });
+  previousProgram = program;
+  return program;
 }
 
 function isDomDeclaration(declaration: ts.Declaration) {

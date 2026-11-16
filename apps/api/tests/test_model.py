@@ -85,3 +85,23 @@ def test_provider_protocol_and_sanitized_errors(monkeypatch):
     with pytest.raises(ModelError) as caught:
         asyncio.run(generate(Prepared([{"role":"user","content":"测试"}],2000,393216),393216))
     assert caught.value.code=="MODEL_AUTH" and "secret" not in str(caught.value)
+
+
+def test_repair_context_omits_duplicate_reference_files_when_candidate_is_valid():
+    context = {
+        "project_kind": "web",
+        "site_format": "react",
+        "request": "修改作品集配色",
+        "website_starter": {"id": "portfolio", "files": {"src/App.tsx": "starter-source"}},
+        "base_artifact": {"title": "旧版", "files": {"src/App.tsx": "base-source"}},
+    }
+    valid_candidate = '{"schema_version":"2","title":"t","summary":"s","files":{"src/App.tsx":"candidate-source"}}'
+    messages = messages_for(context, {"candidate": valid_candidate, "diagnostic": {"code": "COMPILE_ERROR"}}, skill=skill_for("web"))
+    assert "starter-source" not in messages[1]["content"]
+    assert "base-source" not in messages[1]["content"]
+    assert "portfolio" in messages[1]["content"]
+    assert "candidate-source" in messages[2]["content"]
+
+    truncated = messages_for(context, {"candidate": valid_candidate, "diagnostic": {"code": "MODEL_TRUNCATED"}}, skill=skill_for("web"))
+    assert "starter-source" in truncated[1]["content"]
+    assert "base-source" in truncated[1]["content"]

@@ -1,7 +1,9 @@
 """Fetch a dated, public ECB snapshot for exchange-rate projects."""
+import asyncio
 from datetime import date
 import re
 import time
+from weakref import WeakKeyDictionary
 from xml.etree import ElementTree
 
 import httpx
@@ -15,6 +17,7 @@ RATES_FILE = "src/data/exchange-rates.json"
 _NAMESPACE = "{http://www.ecb.int/vocabulary/2002-08-01/eurofxref}"
 _cache: dict | None = None
 _expires = 0.0
+_locks: WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = WeakKeyDictionary()
 
 
 def wants_exchange_rates(prompt: str, base: dict | None) -> bool:
@@ -53,18 +56,23 @@ async def reference_rates() -> dict:
     now = time.monotonic()
     if _cache and now < _expires:
         return _cache
-    try:
-        async with httpx.AsyncClient(timeout=5,follow_redirects=False,trust_env=False) as client:
-            async with client.stream("GET",XML_URL) as response:
-                response.raise_for_status()
-                body = bytearray()
-                async for part in response.aiter_bytes():
-                    body.extend(part)
-                    if len(body) > 64*1024:
-                        raise ValueError("ECB 数据超过大小上限")
-        _cache = parse_exchange_rates(bytes(body))
-        _expires = now + 15*60
-    except (httpx.HTTPError, ElementTree.ParseError, ValueError):
-        _cache = {**_cache,"status":"stale"} if _cache and _cache["rates"] else unavailable
-        _expires = now + 60
-    return _cache
+    lock = _locks.setdefault(asyncio.get_running_loop(), asyncio.Lock())
+    async with lock:
+        now = time.monotonic()
+        if _cache and now < _expires:
+            return _cache
+        try:
+            async with httpx.AsyncClient(timeout=5,follow_redirects=False,trust_env=False) as client:
+                async with client.stream("GET",XML_URL) as response:
+                    response.raise_for_status()
+                    body = bytearray()
+                    async for part in response.aiter_bytes():
+                        body.extend(part)
+                        if len(body) > 64*1024:
+                            raise ValueError("ECB 数据超过大小上限")
+            _cache = parse_exchange_rates(bytes(body))
+            _expires = time.monotonic() + 15*60
+        except (httpx.HTTPError, ElementTree.ParseError, ValueError):
+            _cache = {**_cache,"status":"stale"} if _cache and _cache["rates"] else unavailable
+            _expires = time.monotonic() + 60
+        return _cache

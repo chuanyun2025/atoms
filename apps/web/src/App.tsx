@@ -89,6 +89,7 @@ function Workspace(){
   const [stopping,setStopping]=useState(false);
   const sourceRequest=useRef<{body:string;key:string}>(null);
   const bottom=useRef<HTMLDivElement>(null);
+  const stickToBottom=useRef(true);
   const {data:project,error:projectError}=useQuery({queryKey:["project",pid],queryFn:()=>api<Project>("/projects/"+pid)});
   const {data:messages}=useQuery({queryKey:["messages",pid],queryFn:()=>api<{items:Message[]}>("/projects/"+pid+"/messages")});
   const {data:versions}=useQuery({queryKey:["versions",pid],queryFn:()=>api<{items:Version[]}>("/projects/"+pid+"/versions")});
@@ -152,8 +153,22 @@ function Workspace(){
   useEffect(()=>{sessionStorage.setItem("atoms:draft:"+pid,prompt)},[pid,prompt]);
   useEffect(()=>{
     const chat=bottom.current?.parentElement;
+    if(!chat)return;
+    const onScroll=()=>{stickToBottom.current=chat.scrollHeight-chat.scrollTop-chat.clientHeight<120};
+    chat.addEventListener("scroll",onScroll,{passive:true});
+    return()=>chat.removeEventListener("scroll",onScroll);
+  },[]);
+  useEffect(()=>{
+    if(!stickToBottom.current)return;
+    const chat=bottom.current?.parentElement;
     chat?.scrollTo({top:chat.scrollHeight});
   },[messages,busy,progress?.events.length]);
+  useEffect(()=>{
+    if(!hasEdits)return;
+    const onBeforeUnload=(event:BeforeUnloadEvent)=>{event.preventDefault()};
+    window.addEventListener("beforeunload",onBeforeUnload);
+    return()=>window.removeEventListener("beforeunload",onBeforeUnload);
+  },[hasEdits]);
   useEffect(()=>{
     if(busy&&run&&!active(run))void refresh();
   },[busy,run?.status,refresh]);
@@ -231,6 +246,7 @@ function Workspace(){
     if(!pending||pending.body?.prompt!==body.prompt||pending.body?.retry_of_run_id!==retryOf)pending={id:key(),body};
     sessionStorage.setItem(storageKey,JSON.stringify(pending));
     try{
+      stickToBottom.current=true;
       await api<Run>("/projects/"+pid+"/runs","POST",pending.body,{"Idempotency-Key":pending.id});
       sessionStorage.removeItem(storageKey);if(!retryOf)setPrompt("");await refresh();
     }catch(e){

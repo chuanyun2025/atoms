@@ -82,6 +82,28 @@ def _slide_content_messages(context, repair, skill):
     return messages
 
 
+def _compact_repair_context(context: dict, repair: dict | None) -> dict:
+    if not repair or not isinstance(repair.get("candidate"), str):
+        return context
+    code = (repair.get("diagnostic") or {}).get("code")
+    if code in {"MODEL_TRUNCATED", "ARTIFACT_JSON_INVALID", "ARTIFACT_SCHEMA_INVALID"}:
+        return context
+    try:
+        candidate = strict_json(repair["candidate"])
+    except (ValueError, TypeError):
+        return context
+    if not isinstance(candidate, dict) or not isinstance(candidate.get("files"), dict) or not candidate["files"]:
+        return context
+    trimmed = dict(context)
+    for key in ("website_starter", "game_reference", "base_artifact"):
+        value = trimmed.get(key)
+        if isinstance(value, dict) and "files" in value:
+            trimmed[key] = {k: v for k, v in value.items() if k != "files"}
+            if key == "base_artifact" and "title" in value:
+                trimmed[key]["files_omitted"] = True
+    return trimmed
+
+
 def messages_for(context, repair, *, skill: GenerationSkill):
     if context.get("slide_template"):
         return _slide_content_messages(context, repair, skill)
@@ -104,9 +126,10 @@ def messages_for(context, repair, *, skill: GenerationSkill):
             "game_reference 如存在，提供可试玩样例或独立规则模块。复用符合本次规则的实现，按需求补齐界面并改写布局、美术和节奏，"
             "按用户要求替换不适用的机制。"
         )
+    user_context = _compact_repair_context(context, repair)
     messages = [
         {"role": "system", "content": "\n\n".join(sections)},
-        {"role": "user", "content": compact(context)},
+        {"role": "user", "content": compact(user_context)},
     ]
     if repair:
         instructions = (

@@ -15,6 +15,8 @@ from .media import asset_path
 from .security_ids import uid
 
 DISPATCH_SCHEMA = "0011_model_call_dispatch"
+CURRENT_SCHEMA = "0012_query_indexes"
+SUPPORTED_SCHEMAS = {"0007", "0008", "0009", "0009_publish", "0010", DISPATCH_SCHEMA, CURRENT_SCHEMA}
 
 
 def database_path():
@@ -28,7 +30,7 @@ def inspect_backup(path,media_directory=None):
         if source.execute("PRAGMA integrity_check").fetchone()[0]!="ok":
             raise ValueError("备份完整性检查失败")
         version=source.execute("SELECT version_num FROM alembic_version").fetchone()[0]
-        if version not in {"0007","0008","0009","0009_publish","0010",DISPATCH_SCHEMA}:
+        if version not in SUPPORTED_SCHEMAS:
             raise ValueError("备份数据库版本不受当前程序支持，请先核对对应代码版本")
         projects=source.execute("SELECT count(*) FROM projects").fetchone()[0]
         source.row_factory=sqlite3.Row
@@ -134,9 +136,9 @@ def main():
         target.execute("UPDATE worker_status SET lease_token=NULL,lease_until=0,heartbeat_at=0,state='offline',model_configured=0")
         if report["schema"] != "0007":
             target.execute("UPDATE worker_status SET video_configured=0,text_model=NULL")
-        if report["schema"] in {"0009","0010",DISPATCH_SCHEMA}:
+        if report["schema"] in {"0009", "0010", DISPATCH_SCHEMA, CURRENT_SCHEMA}:
             target.execute("UPDATE run_workspace SET compiled_json=NULL,digest=NULL")
-        if report["schema"]==DISPATCH_SCHEMA:
+        if report["schema"] in {DISPATCH_SCHEMA, CURRENT_SCHEMA}:
             now=time.time()
             pending=target.execute("""SELECT id,visitor_id,run_id,reserved_units FROM model_calls
                 WHERE status='in_flight' AND dispatch_pending=1""").fetchall()

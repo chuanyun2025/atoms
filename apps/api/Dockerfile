@@ -8,6 +8,7 @@ ENV UV_DEFAULT_INDEX=https://mirrors.aliyun.com/pypi/simple/
 RUN uv sync --frozen --no-dev ${UV_SYNC_EXTRAS}
 ENV PATH="/app/apps/api/.venv/bin:$PATH"
 COPY apps/api ./
+RUN rm -rf atoms/skills/pptx atoms/skills/threejs-game-skills atoms/skills/web-artifacts-builder
 COPY shared /app/shared
 COPY apps/web/public/examples /app/apps/web/public/examples
 COPY apps/web/public/templates /app/apps/web/public/templates

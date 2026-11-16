@@ -20,7 +20,14 @@ export function useProjects() {
   });
 }
 export function useCapabilities() {
-  return useQuery({queryKey:["capabilities"],queryFn:()=>api<Capabilities>("/capabilities"),refetchInterval:15000});
+  return useQuery({
+    queryKey:["capabilities"],
+    queryFn:()=>api<Capabilities>("/capabilities"),
+    refetchInterval:query=>{
+      const data=query.state.data;
+      return data?.worker_available&&(data.model_configured||data.video_configured)?60000:10000;
+    },
+  });
 }
 
 export function ProjectLibrary({compact=false}:{compact?:boolean}) {

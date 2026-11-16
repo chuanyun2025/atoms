@@ -46,11 +46,39 @@ async def public_media_url(url):
         raise ModelError("VIDU_MEDIA_URL","Vidu 返回的视频地址不可用")
 
 
+def _open_temp_video(target):
+    target.parent.mkdir(parents=True,exist_ok=True)
+    temporary=target.with_suffix(".part")
+    return temporary,temporary.open("xb")
+
+
+def _finalize_temp_video(output,temporary,target,run,asset_id,size,sha256_hex):
+    output.flush()
+    os.fsync(output.fileno())
+    output.close()
+    temporary.replace(target)
+    from .worker import guard
+    with transaction(True) as conn:
+        guard(one(conn,"SELECT * FROM runs WHERE id=:id",id=run["id"]),run["lease_token"])
+        execute(conn,"INSERT INTO media_assets(id,project_id,mime_type,size_bytes,sha256,created_at) VALUES(:id,:pid,'video/mp4',:size,:sha,:now)",
+                id=asset_id,pid=run["project_id"],size=size,sha=sha256_hex,now=time.time())
+
+
+def _cleanup_temp_video(output,temporary):
+    if output is not None:
+        try:
+            output.close()
+        except OSError:
+            pass
+    if temporary is not None:
+        temporary.unlink(missing_ok=True)
+
+
 async def download_video(run,url):
     asset={"id":uid(),"mime_type":"video/mp4"}
     target=asset_path(asset)
-    target.parent.mkdir(parents=True,exist_ok=True)
-    temporary=target.with_suffix(".part")
+    temporary=None
+    output=None
     size=0
     digest=hashlib.sha256()
     prefix=b""
@@ -66,33 +94,27 @@ async def download_video(run,url):
                     length=response.headers.get("content-length","")
                     if length.isdigit() and int(length)>MAX_VIDEO_BYTES:
                         raise ModelError("VIDU_MEDIA_SIZE","视频文件超过保存上限")
-                    with temporary.open("xb") as output:
-                        async for chunk in response.aiter_bytes(65536):
-                            size+=len(chunk)
-                            if size>MAX_VIDEO_BYTES:
-                                raise ModelError("VIDU_MEDIA_SIZE","视频文件超过保存上限")
-                            if len(prefix)<64:
-                                prefix=(prefix+chunk)[:64]
-                            digest.update(chunk)
-                            output.write(chunk)
-                        output.flush()
-                        os.fsync(output.fileno())
+                    temporary,output=await asyncio.to_thread(_open_temp_video,target)
+                    async for chunk in response.aiter_bytes(65536):
+                        size+=len(chunk)
+                        if size>MAX_VIDEO_BYTES:
+                            raise ModelError("VIDU_MEDIA_SIZE","视频文件超过保存上限")
+                        if len(prefix)<64:
+                            prefix=(prefix+chunk)[:64]
+                        digest.update(chunk)
+                        await asyncio.to_thread(output.write,chunk)
                     break
             else:
                 raise ModelError("VIDU_MEDIA_DOWNLOAD","视频已生成，下载重定向未完成，请继续获取原任务结果")
         if size<16 or b"ftyp" not in prefix:
             raise ModelError("VIDU_MEDIA_FORMAT","视频结果暂不可播放，请继续获取原任务结果")
-        temporary.replace(target)
-        from .worker import guard
-        with transaction(True) as conn:
-            guard(one(conn,"SELECT * FROM runs WHERE id=:id",id=run["id"]),run["lease_token"])
-            execute(conn,"INSERT INTO media_assets(id,project_id,mime_type,size_bytes,sha256,created_at) VALUES(:id,:pid,'video/mp4',:size,:sha,:now)",
-                    id=asset["id"],pid=run["project_id"],size=size,sha=digest.hexdigest(),now=time.time())
+        await asyncio.to_thread(_finalize_temp_video,output,temporary,target,run,asset["id"],size,digest.hexdigest())
+        output=None
         return asset["id"]
     except (httpx.HTTPError,OSError):
         raise ModelError("VIDU_MEDIA_DOWNLOAD","视频已生成，下载暂未完成，可以继续获取原任务结果") from None
     finally:
-        temporary.unlink(missing_ok=True)
+        await asyncio.to_thread(_cleanup_temp_video,output,temporary)
 
 
 def call_change(run,call_id,action,value=None):
@@ -114,6 +136,44 @@ def begin_call(run,job):
             execute(conn,"UPDATE video_jobs SET phase='submitting',updated_at=:now WHERE run_id=:rid",now=time.time(),rid=run["id"])
 
 
+def _load_image_data_url(project_id,image_asset_id):
+    with transaction() as conn:
+        asset=one(conn,"SELECT * FROM media_assets WHERE id=:id AND project_id=:pid",id=image_asset_id,pid=project_id)
+    if not asset or not asset_path(asset).is_file():
+        raise ModelError("VIDEO_INPUT_MISSING","参考图片暂不可用，请重新上传")
+    return "data:"+asset["mime_type"]+";base64,"+base64.b64encode(asset_path(asset).read_bytes()).decode()
+
+
+def _record_submitted_task(run,video_call_id,task):
+    checkpoint(run,provider_task_id=task,phase="created")
+    with transaction(True) as conn:
+        execute(conn,"UPDATE media_calls SET provider_task_id=:task WHERE id=:id",task=task,id=video_call_id)
+
+
+def _load_video_job(run_id):
+    with transaction() as conn:
+        return one(conn,"SELECT * FROM video_jobs WHERE run_id=:id",id=run_id)
+
+
+def _load_output_asset(asset_id,project_id):
+    with transaction() as conn:
+        return one(conn,"SELECT * FROM media_assets WHERE id=:id AND project_id=:pid",id=asset_id,pid=project_id)
+
+
+def _complete_fixture_video(run,job):
+    from pathlib import Path
+    from .worker import stage
+    root=Path(__file__).resolve().parents[3]/"shared"/"test-fixtures"
+    begin_call(run,job)
+    stage(run["id"],run["lease_token"],"video_processing","正在生成视频（测试服务）")
+    with transaction(True) as conn:
+        result=store_asset(conn,run["project_id"],(root/"video.mp4").read_bytes(),"video/mp4")
+    actual=media_credits.estimated_usage(job["model"],job["resolution"],job["duration"])
+    call_change(run,job["video_call_id"],"settle",actual)
+    checkpoint(run,output_asset_id=result["id"],phase="success",provider_credits=actual)
+    return result["id"]
+
+
 async def poll_result(run,provider,task_id,call_id):
     from .worker import stage
     cfg=settings()
@@ -131,22 +191,22 @@ async def poll_result(run,provider,task_id,call_id):
             await asyncio.sleep(cfg.vidu_poll_seconds)
             continue
         phase=result["state"]
-        checkpoint(run,phase=phase)
+        await asyncio.to_thread(checkpoint,run,phase=phase)
         if phase=="failed":
-            call_change(run,call_id,"release","PROVIDER_FAILED")
+            await asyncio.to_thread(call_change,run,call_id,"release","PROVIDER_FAILED")
             raise ModelError("VIDU_GENERATION_FAILED","视频生成未完成，预授权积分已退回；可调整描述后再试")
         if phase=="success":
             actual=result.get("credits")
-            checkpoint(run,provider_credits=actual if type(actual) is int else None)
+            await asyncio.to_thread(checkpoint,run,provider_credits=actual if type(actual) is int else None)
             # Generation is billable even when downloading later needs recovery.
-            call_change(run,call_id,"settle",actual)
+            await asyncio.to_thread(call_change,run,call_id,"settle",actual)
             if isinstance(result.get("video_url"),str):
                 return result["video_url"]
             if empty>=3:
                 raise ModelError("VIDU_RESULT_MISSING","视频已生成，暂未获取到文件，可以继续原任务")
             empty+=1
         if phase!=previous:
-            stage(run["id"],run["lease_token"],"video_processing" if phase=="processing" else "video_queueing",
+            await asyncio.to_thread(stage,run["id"],run["lease_token"],"video_processing" if phase=="processing" else "video_queueing",
                   "正在生成视频" if phase=="processing" else "视频已受理，正在排队")
             previous=phase
         await asyncio.sleep(cfg.vidu_poll_seconds)
@@ -157,31 +217,25 @@ async def acquire_result(run,job,provider):
     task=job["provider_task_id"]
     if not task and job["phase"]=="submitting":
         raise ModelError("VIDU_SUBMISSION_UNCERTAIN","上次提交结果待核对，请联系管理员，避免重复扣费")
-    begin_call(run,job)
+    await asyncio.to_thread(begin_call,run,job)
     if not task:
-        stage(run["id"],run["lease_token"],"video_submitting","正在提交视频任务")
+        await asyncio.to_thread(stage,run["id"],run["lease_token"],"video_submitting","正在提交视频任务")
         try:
             options=dict(prompt=run["prompt"],expected_model=job["model"],resolution=job["resolution"],
                          duration=job["duration"],audio=job["audio"],payload=run["id"])
             if job["image_asset_id"]:
-                with transaction() as conn:
-                    asset=one(conn,"SELECT * FROM media_assets WHERE id=:id AND project_id=:pid",id=job["image_asset_id"],pid=run["project_id"])
-                if not asset or not asset_path(asset).is_file():
-                    raise ModelError("VIDEO_INPUT_MISSING","参考图片暂不可用，请重新上传")
-                data="data:"+asset["mime_type"]+";base64,"+base64.b64encode(asset_path(asset).read_bytes()).decode()
+                data=await asyncio.to_thread(_load_image_data_url,run["project_id"],job["image_asset_id"])
                 task=await provider.submit_video(image=data,**options)
             else:
                 task=await provider.submit_video(**options)
         except ModelError as error:
             if not error.uncertain:
-                call_change(run,job["video_call_id"],"release",error.code)
-                checkpoint(run,phase="failed")
+                await asyncio.to_thread(call_change,run,job["video_call_id"],"release",error.code)
+                await asyncio.to_thread(checkpoint,run,phase="failed")
             raise
-        checkpoint(run,provider_task_id=task,phase="created")
-        with transaction(True) as conn:
-            execute(conn,"UPDATE media_calls SET provider_task_id=:task WHERE id=:id",task=task,id=job["video_call_id"])
+        await asyncio.to_thread(_record_submitted_task,run,job["video_call_id"],task)
     url=await poll_result(run,provider,task,job["video_call_id"])
-    stage(run["id"],run["lease_token"],"video_downloading","视频已生成，正在保存")
+    await asyncio.to_thread(stage,run["id"],run["lease_token"],"video_downloading","视频已生成，正在保存")
     for attempt in range(3):
         try:
             return await download_video(run,url)
@@ -192,30 +246,18 @@ async def acquire_result(run,job,provider):
 
 
 async def execute_video(run,context):
-    from .worker import stage
     cfg=settings()
-    with transaction() as conn:
-        job=one(conn,"SELECT * FROM video_jobs WHERE run_id=:id",id=run["id"])
+    job=await asyncio.to_thread(_load_video_job,run["id"])
     if not job:
         raise ModelError("VIDEO_INPUT_MISSING","视频任务配置不可用，请重新提交")
     if not job["output_asset_id"]:
         if cfg.app_env=="test" and cfg.test_fixture:
-            from pathlib import Path
-            root=Path(__file__).resolve().parents[3]/"shared"/"test-fixtures"
-            begin_call(run,job)
-            stage(run["id"],run["lease_token"],"video_processing","正在生成视频（测试服务）")
-            with transaction(True) as conn:
-                result=store_asset(conn,run["project_id"],(root/"video.mp4").read_bytes(),"video/mp4")
-            job["output_asset_id"]=result["id"]
-            actual=media_credits.estimated_usage(job["model"],job["resolution"],job["duration"])
-            call_change(run,job["video_call_id"],"settle",actual)
-            checkpoint(run,output_asset_id=result["id"],phase="success",provider_credits=actual)
+            job["output_asset_id"]=await asyncio.to_thread(_complete_fixture_video,run,job)
         else:
             async with ProviderClient() as provider:
                 job["output_asset_id"]=await acquire_result(run,job,provider)
-                checkpoint(run,output_asset_id=job["output_asset_id"],phase="success")
-    with transaction() as conn:
-        asset=one(conn,"SELECT * FROM media_assets WHERE id=:id AND project_id=:pid",id=job["output_asset_id"],pid=run["project_id"])
+                await asyncio.to_thread(checkpoint,run,output_asset_id=job["output_asset_id"],phase="success")
+    asset=await asyncio.to_thread(_load_output_asset,job["output_asset_id"],run["project_id"])
     if not asset or not asset_path(asset).is_file():
         raise ModelError("VIDU_MEDIA_MISSING","视频文件暂不可用，请联系管理员恢复")
     media={"asset_id":asset["id"],"image_asset_id":job["image_asset_id"],"model":job["model"],"resolution":job["resolution"],"duration":job["duration"],"audio":bool(job["audio"])}

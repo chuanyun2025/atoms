@@ -6,18 +6,23 @@ from sqlalchemy.pool import NullPool
 from .config import settings
 
 engine = create_engine(settings().database_url, poolclass=NullPool, connect_args={"check_same_thread": False, "timeout": 5})
+_journal_verified = False
 
 
 @event.listens_for(engine, "connect")
 def setup_connection(conn, _):
+    global _journal_verified
     conn.isolation_level = None
     cursor = conn.cursor()
     cursor.execute("PRAGMA foreign_keys=ON")
     cursor.execute("PRAGMA busy_timeout=5000")
     cursor.execute("PRAGMA synchronous=FULL")
-    mode=cursor.execute("PRAGMA journal_mode").fetchone()[0]
-    if mode not in {"delete","memory"}:
-        raise RuntimeError("本项目要求 SQLite DELETE journal mode，请离线切换后启动")
+    if not _journal_verified:
+        mode = cursor.execute("PRAGMA journal_mode").fetchone()[0]
+        if mode not in {"delete", "memory"}:
+            cursor.close()
+            raise RuntimeError("本项目要求 SQLite DELETE journal mode，请离线切换后启动")
+        _journal_verified = True
     cursor.close()
 
 

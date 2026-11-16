@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Streamin
 from starlette.concurrency import run_in_threadpool
 from .config import settings
 from .db import transaction, all_rows, one, compact
-from .security import COOKIE, create_session, csrf, visitor, origin_check, ticket_encode, ticket_decode, uid
+from .security import COOKIE, client_ip, create_session, csrf, read_visitor, visitor, origin_check, ticket_encode, ticket_decode, uid
 from .schemas import ProjectCreate, RunCreate, Restore, SourceSave, StatePatch, ImageUpload
 from .source_edits import source_artifact, save_source_version, validate_source
 from .media import asset_path, owned_asset, upload_image
@@ -34,32 +34,98 @@ async def lifespan(app):
         pass
 
 
+class _PayloadTooLarge(Exception):
+    pass
+
+
+def _boundary_response(status: int, detail: dict):
+    return JSONResponse(
+        {"detail": detail},
+        status_code=status,
+        headers={
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
+        },
+    )
+
+
+class BoundaryMiddleware:
+    def __init__(self, wrapped):
+        self.wrapped = wrapped
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.wrapped(scope, receive, send)
+            return
+        method = scope.get("method", "GET")
+        path = scope.get("path", "")
+        headers = {k.lower(): v for k, v in scope.get("headers", [])}
+        large_source = (
+            method == "POST"
+            and path.startswith("/api/v1/projects/")
+            and "/versions/" in path
+            and path.endswith("/source")
+        )
+        large_image = path.endswith("/media/images")
+        maximum = (12 if large_source else 8 if large_image else 2) * 1024 * 1024
+        raw_size = headers.get(b"content-length")
+        if raw_size is not None:
+            size_text = raw_size.decode("latin-1").strip()
+            if not size_text.isdecimal() or int(size_text) > maximum:
+                await _boundary_response(413, {"code": "request_too_large", "message": "请求过大"})(scope, receive, send)
+                return
+        if method in {"POST", "PATCH", "PUT", "DELETE"} and path.startswith("/api/v1/"):
+            try:
+                origin_check(Request(scope), path != "/api/v1/session")
+            except Exception as exc:
+                if hasattr(exc, "status_code"):
+                    await _boundary_response(exc.status_code, exc.detail)(scope, receive, send)
+                    return
+                raise
+        received = 0
+        too_large = False
+        response_started = False
+
+        async def limited_receive():
+            nonlocal received, too_large
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > maximum:
+                    too_large = True
+                    raise _PayloadTooLarge()
+            return message
+
+        async def send_with_headers(message):
+            nonlocal response_started
+            if too_large and not response_started:
+                return
+            if message["type"] == "http.response.start":
+                response_started = True
+                hdrs = list(message.get("headers", []))
+                names = {k.lower() for k, _ in hdrs}
+                if b"cache-control" not in names:
+                    hdrs.append((b"cache-control", b"no-store"))
+                if b"x-content-type-options" not in names:
+                    hdrs.append((b"x-content-type-options", b"nosniff"))
+                if b"referrer-policy" not in names:
+                    hdrs.append((b"referrer-policy", b"no-referrer"))
+                message = {**message, "headers": hdrs}
+            await send(message)
+
+        try:
+            await self.wrapped(scope, limited_receive, send_with_headers)
+        except _PayloadTooLarge:
+            if response_started:
+                raise
+        if too_large and not response_started:
+            await _boundary_response(413, {"code": "request_too_large", "message": "请求过大"})(scope, receive, send)
+
+
 app = FastAPI(title="Atoms Demo API",version="0.1.0",lifespan=lifespan,docs_url="/api/docs" if settings().app_env != "production" else None,redoc_url=None)
 app.include_router(publication_router)
-
-
-@app.middleware("http")
-async def boundaries(request,call_next):
-    size = request.headers.get("content-length","0")
-    large_request = request.url.path.endswith("/media/images") or (
-        request.method == "POST" and request.url.path.startswith("/api/v1/projects/")
-        and "/versions/" in request.url.path and request.url.path.endswith("/source")
-    )
-    maximum=(8 if large_request else 2)*1024*1024
-    if not size.isdecimal() or int(size)>maximum:
-        return JSONResponse({"detail":{"code":"request_too_large","message":"请求过大"}},413)
-    if request.method in {"POST","PATCH","PUT","DELETE"} and request.url.path.startswith("/api/v1/"):
-        try:
-            origin_check(request,request.url.path != "/api/v1/session")
-        except Exception as e:
-            if hasattr(e,"status_code"):
-                return JSONResponse({"detail":e.detail},e.status_code)
-            raise
-    response = await call_next(request)
-    response.headers["Cache-Control"]="no-store"
-    response.headers["X-Content-Type-Options"]="nosniff"
-    response.headers["Referrer-Policy"]="no-referrer"
-    return response
+app.add_middleware(BoundaryMiddleware)
 
 
 @app.get("/health/live")
@@ -86,11 +152,11 @@ def bootstrap(request:Request,response:Response):
 
 
 @app.get("/api/v1/capabilities")
-def capabilities(user=Depends(visitor)):
+def capabilities(session=Depends(read_visitor)):
     from .db import maintenance
-    with transaction() as conn:
-        readonly=maintenance(conn)
-        worker=one(conn,"SELECT * FROM worker_status WHERE id=1")
+    _, conn = session
+    readonly=maintenance(conn)
+    worker=one(conn,"SELECT * FROM worker_status WHERE id=1")
     available=bool(worker and worker["heartbeat_at"]>time.time()-20 and worker["lease_until"]>time.time())
     return {"model_configured":bool(available and worker["model_configured"]),"model":worker["text_model"] if available else None,
             "video_configured":bool(available and worker["video_configured"]),"video_model":settings().vidu_model,"video_resolution":settings().vidu_resolution,
@@ -100,9 +166,9 @@ def capabilities(user=Depends(visitor)):
 
 
 @app.get("/api/v1/wallet")
-def wallet_get(user=Depends(visitor)):
-    with transaction() as conn:
-        return credits.wallet(conn,user["id"])
+def wallet_get(session=Depends(read_visitor)):
+    user, conn = session
+    return credits.wallet(conn,user["id"])
 
 
 @app.get("/api/v1/video/quote")
@@ -112,15 +178,15 @@ def video_quote(duration:int=Query(default=5,ge=1,le=16),user=Depends(visitor)):
 
 
 @app.get("/api/v1/wallet/transactions")
-def wallet_transactions(before:float|None=None,user=Depends(visitor)):
-    with transaction() as conn:
-        return credits.transactions(conn,user["id"],before)
+def wallet_transactions(before:float|None=None,session=Depends(read_visitor)):
+    user, conn = session
+    return credits.transactions(conn,user["id"],before)
 
 
 @app.get("/api/v1/projects")
-def projects(user=Depends(visitor)):
-    with transaction() as conn:
-        return {"items":all_rows(conn,"SELECT * FROM projects WHERE owner_id=:owner ORDER BY updated_at DESC",owner=user["id"])}
+def projects(session=Depends(read_visitor)):
+    user, conn = session
+    return {"items":all_rows(conn,"SELECT * FROM projects WHERE owner_id=:owner ORDER BY updated_at DESC",owner=user["id"])}
 
 
 @app.post("/api/v1/projects",status_code=201)
@@ -130,21 +196,21 @@ def project_create(data:ProjectCreate,user=Depends(visitor)):
 
 
 @app.get("/api/v1/projects/{pid}")
-def project_get(pid:str,user=Depends(visitor)):
-    with transaction() as conn:
-        return service.project(conn,pid,user["id"])
+def project_get(pid:str,session=Depends(read_visitor)):
+    user, conn = session
+    return service.project(conn,pid,user["id"])
 
 
 @app.get("/api/v1/projects/{pid}/messages")
-def messages(pid:str,user=Depends(visitor)):
-    with transaction() as conn:
-        service.project(conn,pid,user["id"])
-        return {"items":all_rows(conn,"""SELECT m.*,r.status AS run_status,r.error_code AS run_error_code,
-            CASE WHEN m.role='assistant' AND r.status IN ('failed','interrupted') THEN r.prompt END AS run_prompt,
-            r.retry_of_run_id,r.base_version_id AS run_base_version_id,r.model_calls,(c.run_id IS NOT NULL) AS has_candidate
-            FROM messages m LEFT JOIN runs r ON m.run_id=r.id
-            LEFT JOIN run_candidates c ON c.run_id=r.id
-            WHERE m.project_id=:id ORDER BY m.created_at,m.id""",id=pid)}
+def messages(pid:str,session=Depends(read_visitor)):
+    user, conn = session
+    service.project(conn,pid,user["id"])
+    return {"items":all_rows(conn,"""SELECT m.*,r.status AS run_status,r.error_code AS run_error_code,
+        CASE WHEN m.role='assistant' AND r.status IN ('failed','interrupted') THEN r.prompt END AS run_prompt,
+        r.retry_of_run_id,r.base_version_id AS run_base_version_id,r.model_calls,(c.run_id IS NOT NULL) AS has_candidate
+        FROM messages m LEFT JOIN runs r ON m.run_id=r.id
+        LEFT JOIN run_candidates c ON c.run_id=r.id
+        WHERE m.project_id=:id ORDER BY m.created_at,m.id""",id=pid)}
 
 
 @app.post("/api/v1/projects/{pid}/media/images",status_code=201)
@@ -165,26 +231,31 @@ def media_get(pid:str,asset_id:str,download:bool=False,user=Depends(visitor)):
     path=asset_path(asset)
     if not path.is_file():
         service.error(404,"media_missing","媒体文件暂不可用")
-    return FileResponse(path,media_type=asset["mime_type"],filename="atoms-video.mp4" if asset["mime_type"]=="video/mp4" else path.name,
-                        content_disposition_type="attachment" if download else "inline")
+    return FileResponse(
+        path,
+        media_type=asset["mime_type"],
+        filename="atoms-video.mp4" if asset["mime_type"]=="video/mp4" else path.name,
+        content_disposition_type="attachment" if download else "inline",
+        headers={} if download else {"Cache-Control": "private, max-age=3600"},
+    )
 
 
 @app.get("/api/v1/projects/{pid}/video-input")
-def video_input(pid:str,user=Depends(visitor)):
-    with transaction() as conn:
-        service.project(conn,pid,user["id"])
-        job=one(conn,"SELECT j.*,r.prompt FROM video_jobs j JOIN runs r ON r.id=j.run_id WHERE r.project_id=:pid ORDER BY r.created_at DESC LIMIT 1",pid=pid)
-        if not job:
-            image=one(conn,"SELECT id FROM media_assets WHERE project_id=:pid AND mime_type LIKE 'image/%' ORDER BY created_at DESC LIMIT 1",pid=pid)
-            if image:
-                return {"image_asset_id":image["id"],"duration":5,"audio":True}
+def video_input(pid:str,session=Depends(read_visitor)):
+    user, conn = session
+    service.project(conn,pid,user["id"])
+    job=one(conn,"SELECT j.*,r.prompt FROM video_jobs j JOIN runs r ON r.id=j.run_id WHERE r.project_id=:pid ORDER BY r.created_at DESC LIMIT 1",pid=pid)
+    if not job:
+        image=one(conn,"SELECT id FROM media_assets WHERE project_id=:pid AND mime_type LIKE 'image/%' ORDER BY created_at DESC LIMIT 1",pid=pid)
+        if image:
+            return {"image_asset_id":image["id"],"duration":5,"audio":True}
     return {key:job[key] for key in ("image_asset_id","duration","audio","prompt","input_mode")} if job else None
 
 
 @app.post("/api/v1/projects/{pid}/runs",status_code=202)
 def run_create(pid:str,data:RunCreate,request:Request,idempotency_key:str=Header(default=""),user=Depends(visitor)):
     with transaction(True) as conn:
-        return service.create_run(conn,user["id"],pid,data,idempotency_key,request.headers.get("x-real-ip") or request.client.host)
+        return service.create_run(conn,user["id"],pid,data,idempotency_key,client_ip(request))
 
 
 def owned_run(conn,rid,owner):
@@ -195,14 +266,14 @@ def owned_run(conn,rid,owner):
 
 
 @app.get("/api/v1/runs/{rid}")
-def run_get(rid:str,user=Depends(visitor)):
-    with transaction() as conn:
-        run=service.public_run(owned_run(conn,rid,user["id"]))
-        workspace=one(conn,"SELECT source_revision,digest AS preview_digest FROM run_workspace WHERE run_id=:id",id=rid)
-        if workspace:
-            workspace["has_preview"]=bool(workspace["preview_digest"])
-        event_seq=one(conn,"SELECT COALESCE(MAX(seq),0) AS seq FROM run_events WHERE run_id=:id",id=rid)["seq"]
-        return {**run,"workspace":workspace,"event_seq":event_seq}
+def run_get(rid:str,session=Depends(read_visitor)):
+    user, conn = session
+    run=service.public_run(owned_run(conn,rid,user["id"]))
+    workspace=one(conn,"SELECT source_revision,digest AS preview_digest FROM run_workspace WHERE run_id=:id",id=rid)
+    if workspace:
+        workspace["has_preview"]=bool(workspace["preview_digest"])
+    event_seq=one(conn,"SELECT COALESCE(MAX(seq),0) AS seq FROM run_events WHERE run_id=:id",id=rid)["seq"]
+    return {**run,"workspace":workspace,"event_seq":event_seq}
 
 
 @app.post("/api/v1/runs/{rid}/stop")
@@ -220,17 +291,17 @@ def run_stop(rid:str,user=Depends(visitor)):
 
 
 @app.get("/api/v1/runs/{rid}/source")
-def run_source(rid:str,user=Depends(visitor)):
-    with transaction() as conn:
-        run=owned_run(conn,rid,user["id"])
-        row=one(conn,"SELECT source_json FROM run_workspace WHERE run_id=:id",id=rid)
-        if not row and run["result_version_id"]:
-            version=service.owned_version(conn,run["project_id"],run["result_version_id"])
-            artifact=json.loads(version["raw_json"])
-            if artifact.get("files"):
-                return {"schema_version":artifact["schema_version"],"files":artifact["files"]}
-        if not row:
-            service.error(404,"source_unavailable","源码暂未就绪")
+def run_source(rid:str,session=Depends(read_visitor)):
+    user, conn = session
+    run=owned_run(conn,rid,user["id"])
+    row=one(conn,"SELECT source_json FROM run_workspace WHERE run_id=:id",id=rid)
+    if not row and run["result_version_id"]:
+        version=service.owned_version(conn,run["project_id"],run["result_version_id"])
+        artifact=json.loads(version["raw_json"])
+        if artifact.get("files"):
+            return {"schema_version":artifact["schema_version"],"files":artifact["files"]}
+    if not row:
+        service.error(404,"source_unavailable","源码暂未就绪")
     return json.loads(row["source_json"])
 
 
@@ -243,16 +314,16 @@ def can_preview_run(run):
 
 
 @app.post("/api/v1/runs/{rid}/preview-ticket")
-def run_preview_ticket(rid:str,user=Depends(visitor)):
-    with transaction() as conn:
-        run=owned_run(conn,rid,user["id"])
-        if run["result_version_id"]:
-            row=one(conn,"""SELECT a.digest FROM versions v JOIN artifacts a ON a.id=v.artifact_id
-                WHERE v.id=:id AND json_extract(a.raw_json,'$.schema_version')!='3'""",id=run["result_version_id"])
-        else:
-            row=one(conn,"SELECT digest FROM run_workspace WHERE run_id=:id AND digest IS NOT NULL",id=rid)
-        if not can_preview_run(run) or not row:
-            service.error(404,"preview_unavailable","临时预览已结束或尚未就绪")
+def run_preview_ticket(rid:str,session=Depends(read_visitor)):
+    user, conn = session
+    run=owned_run(conn,rid,user["id"])
+    if run["result_version_id"]:
+        row=one(conn,"""SELECT a.digest FROM versions v JOIN artifacts a ON a.id=v.artifact_id
+            WHERE v.id=:id AND json_extract(a.raw_json,'$.schema_version')!='3'""",id=run["result_version_id"])
+    else:
+        row=one(conn,"SELECT digest FROM run_workspace WHERE run_id=:id AND digest IS NOT NULL",id=rid)
+    if not can_preview_run(run) or not row:
+        service.error(404,"preview_unavailable","临时预览已结束或尚未就绪")
     payload={"run_id":rid,"digest":row["digest"],"instance_id":uid(),"channel_nonce":uid()+uid(),"exp":time.time()+120,"read_only":False}
     return {**payload,"url":"/sandbox/runs/"+rid+"?ticket="+ticket_encode(payload)}
 
@@ -292,17 +363,17 @@ async def run_events(rid:str,request:Request,after:int=0,user=Depends(visitor)):
 
 
 @app.get("/api/v1/projects/{pid}/versions")
-def versions(pid:str,user=Depends(visitor)):
-    with transaction() as conn:
-        service.project(conn,pid,user["id"])
-        return {"items":[service.public_version(row) for row in all_rows(conn,"SELECT * FROM versions WHERE project_id=:id ORDER BY number DESC",id=pid)]}
+def versions(pid:str,session=Depends(read_visitor)):
+    user, conn = session
+    service.project(conn,pid,user["id"])
+    return {"items":[service.public_version(row) for row in all_rows(conn,"SELECT * FROM versions WHERE project_id=:id ORDER BY number DESC",id=pid)]}
 
 
 @app.get("/api/v1/projects/{pid}/versions/{vid}")
-def version_get(pid:str,vid:str,user=Depends(visitor)):
-    with transaction() as conn:
-        service.project(conn,pid,user["id"])
-        return service.public_version(service.owned_version(conn,pid,vid),True)
+def version_get(pid:str,vid:str,session=Depends(read_visitor)):
+    user, conn = session
+    service.project(conn,pid,user["id"])
+    return service.public_version(service.owned_version(conn,pid,vid),True)
 
 
 @app.post("/api/v1/projects/{pid}/versions/{vid}/source")
@@ -322,14 +393,14 @@ def version_restore(pid:str,vid:str,data:Restore,user=Depends(visitor)):
 
 
 @app.post("/api/v1/projects/{pid}/versions/{vid}/preview-ticket")
-def preview_ticket(pid:str,vid:str,user=Depends(visitor)):
+def preview_ticket(pid:str,vid:str,session=Depends(read_visitor)):
     from .db import maintenance
-    with transaction() as conn:
-        row=service.project(conn,pid,user["id"])
-        version=service.owned_version(conn,pid,vid)
-        if json.loads(version["raw_json"]).get("schema_version")=="3":
-            service.error(400,"native_video","视频请使用原生播放器打开")
-        readonly=maintenance(conn) or row["current_version_id"]!=vid
+    user, conn = session
+    row=service.project(conn,pid,user["id"])
+    version=service.owned_version(conn,pid,vid)
+    if json.loads(version["raw_json"]).get("schema_version")=="3":
+        service.error(400,"native_video","视频请使用原生播放器打开")
+    readonly=maintenance(conn) or row["current_version_id"]!=vid
     payload={"version_id":vid,"digest":version["digest"],"instance_id":uid(),"channel_nonce":uid()+uid(),"exp":time.time()+120,"read_only":readonly}
     return {**payload,"url":"/sandbox/versions/"+vid+"?ticket="+ticket_encode(payload)}
 
@@ -386,10 +457,10 @@ def run_sandbox(rid:str,request:Request,ticket:str=""):
 
 
 @app.get("/api/v1/projects/{pid}/app-state")
-def state_get(pid:str,user=Depends(visitor)):
-    with transaction() as conn:
-        service.project(conn,pid,user["id"])
-        return service.app_state(conn,pid)
+def state_get(pid:str,session=Depends(read_visitor)):
+    user, conn = session
+    service.project(conn,pid,user["id"])
+    return service.app_state(conn,pid)
 
 
 @app.patch("/api/v1/projects/{pid}/app-state")

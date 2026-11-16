@@ -112,7 +112,7 @@ def test_excess_usage_stays_pending_without_negative_wallet(client):
     assert client.get("/api/v1/wallet").json()["available"]=="500.000000"
 
 
-@pytest.mark.parametrize("scenario",["success","length","missing","timeout","connect","rejected"])
+@pytest.mark.parametrize("scenario",["success","length","protocol_with_usage","network_with_usage","missing","timeout","connect","rejected"])
 def test_worker_usage_failure_and_holds(client,monkeypatch,scenario):
     run=running(client)
     original=httpx.AsyncClient
@@ -129,6 +129,10 @@ def test_worker_usage_failure_and_holds(client,monkeypatch,scenario):
         usage={"input_tokens":1200,"output_tokens":400}
         if scenario=="length":
             return httpx.Response(502,json={"error":{"code":"MODEL_TRUNCATED","message":"output truncated","usage":usage}})
+        if scenario=="protocol_with_usage":
+            return httpx.Response(502,json={"error":{"code":"MODEL_PROTOCOL","message":"malformed provider response","usage":usage,"uncertain":False}})
+        if scenario=="network_with_usage":
+            return httpx.Response(502,json={"error":{"code":"MODEL_NETWORK","message":"stream interrupted after usage","usage":usage,"uncertain":False}})
         result={"content":"{}"}
         if scenario!="missing":result["usage"]=usage
         return httpx.Response(200,json=result)
@@ -139,7 +143,7 @@ def test_worker_usage_failure_and_holds(client,monkeypatch,scenario):
     else:
         with pytest.raises(ModelError):asyncio.run(generation)
     wallet=client.get("/api/v1/wallet").json()
-    if scenario in {"success","length"}:
+    if scenario in {"success","length","protocol_with_usage","network_with_usage"}:
         assert wallet["spent"]=="0.056000" and wallet["held"]=="0.000000"
     elif scenario in {"timeout","missing"}:
         assert wallet["spent"]=="0.000000" and wallet["held_units"]>0

@@ -27,6 +27,15 @@ class Settings(BaseSettings):
     pending_timeout_seconds: int = 3600
     read_only_mode: bool = False
     test_fixture: bool = False
+    rate_limit_enabled: bool | None = None
+    session_rate_limit_per_hour: int = Field(default=20, ge=0)
+    run_rate_limit_per_minute: int = Field(default=15, ge=0)
+    trusted_proxy_cidrs: str = ""
+    trust_private_proxies: bool = True
+    trust_cf_connecting_ip: bool = False
+
+    def should_rate_limit(self) -> bool:
+        return self.app_env != "test" if self.rate_limit_enabled is None else self.rate_limit_enabled
 
     @model_validator(mode="after")
     def validate_provider(self):

@@ -184,12 +184,19 @@ def create_app(config=None, *, transport=None):
         async def call():
             key=await key_for("llm")
             timeout=min(data.timeout_seconds or cfg.llm_request_timeout_seconds,cfg.llm_request_timeout_seconds)
+            usage=None
+
+            def remember_usage(value):
+                nonlocal usage
+                usage=value
+
             try:
                 async with asyncio.timeout(timeout):
                     result=await chat_completions.complete(cfg,key,[m.model_dump() for m in data.messages],
-                                   data.max_output_tokens,data.response_schema,transport=transport)
+                                   data.max_output_tokens,data.response_schema,transport=transport,on_usage=remember_usage)
             except TimeoutError:
-                raise ModelError("MODEL_TIMEOUT","模型请求超时，未确认的积分预授权待核对",uncertain=True) from None
+                message="模型请求超时；已返回用量按实际结算" if usage is not None else "模型请求超时，未确认的积分预授权待核对"
+                raise ModelError("MODEL_TIMEOUT",message,usage=usage,uncertain=usage is None) from None
             return asdict(result)
         return await invoke(request,"text.generate",lambda:complete_until_disconnect(request,call))
 

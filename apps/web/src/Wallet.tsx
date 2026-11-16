@@ -1,17 +1,28 @@
 import {useState} from "react";
-import {useQuery} from "@tanstack/react-query";
+import {useQuery,useQueryClient} from "@tanstack/react-query";
 import {Coins,Copy,Gift,LoaderCircle} from "lucide-react";
-import {api,date} from "./api";
+import {api,date,type Project} from "./api";
 import Modal from "./Modal";
 
 export type Wallet={visitor_id:string;balance:string;held:string;available:string;spent:string;available_units:number;welcome_credits:number;credits_per_yuan:number;pricing:{input_per_million:number;output_per_million:number}};
 type Ledger={id:string;kind:string;amount:string;input_tokens:number;output_tokens:number;created_at:number};
 type Pending={id:string;status:string;reserved:string;created_at:number;error_code:string|null};
 type Transactions={items:Ledger[];pending:Pending[];next_before:number|null};
-export function useWallet(){return useQuery({queryKey:["wallet"],queryFn:()=>api<Wallet>("/wallet"),refetchInterval:5000})}
+export function useWallet(live=false){
+  const client=useQueryClient();
+  return useQuery({
+    queryKey:["wallet"],
+    queryFn:()=>api<Wallet>("/wallet"),
+    refetchInterval:()=>{
+      if(live)return 5000;
+      const projects=client.getQueryData<{items:Project[]}>(["projects"]);
+      return projects?.items.some(project=>project.active_run_id)?5000:false;
+    },
+  });
+}
 const short=(value:string)=>value.includes(".")?value.replace(/\.?0+$/,""):value;
 function WalletDialog({onClose}:{onClose:()=>void}){
-  const {data:wallet,error}=useWallet(),[before,setBefore]=useState<number|null>(null),[copied,setCopied]=useState(false);
+  const {data:wallet,error}=useWallet(true),[before,setBefore]=useState<number|null>(null),[copied,setCopied]=useState(false);
   const {data:ledger,isLoading,error:ledgerError}=useQuery({queryKey:["credit-transactions",before],queryFn:()=>api<Transactions>("/wallet/transactions"+(before?"?before="+before:"")),refetchInterval:5000});
   return <Modal title="我的积分" onClose={onClose}>
     {error&&<div className="inline-error">{error.message}</div>}

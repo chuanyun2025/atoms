@@ -17,6 +17,24 @@ def error(status,code,message):
     raise HTTPException(status, detail={"code":code,"message":message})
 
 
+def enforce_rate_limit(conn, key: str, limit: int, window_seconds: int, message: str = "请求过于频繁，请稍后再试"):
+    if limit <= 0:
+        return
+    now = time.time()
+    row = one(
+        conn,
+        """INSERT INTO quota_windows(key, count, expires_at)
+        VALUES(:key, 1, :expires)
+        ON CONFLICT(key) DO UPDATE SET
+          count = CASE WHEN quota_windows.expires_at <= :now THEN 1 ELSE quota_windows.count + 1 END,
+          expires_at = CASE WHEN quota_windows.expires_at <= :now THEN :expires ELSE quota_windows.expires_at END
+        RETURNING count""",
+        key=key, expires=now + window_seconds, now=now,
+    )
+    if row and row["count"] > limit:
+        error(429, "rate_limited", message)
+
+
 def project(conn, project_id, owner):
     row = one(conn,"SELECT * FROM projects WHERE id=:id AND owner_id=:owner",id=project_id,owner=owner)
     if not row:
@@ -116,6 +134,9 @@ def create_run(conn, owner, project_id, data, idempotency_key, ip):
     elif data.video is not None:
         error(422,"invalid_video_options","只有视频项目可以使用视频参数")
     mutable(conn)
+    if settings().should_rate_limit():
+        enforce_rate_limit(conn, f"run:{ip or 'unknown'}", settings().run_rate_limit_per_minute, 60,
+                           "提交任务过于频繁，请稍后再试")
     check_revision(row,data.expected_revision)
     if row["active_run_id"]:
         error(409,"run_active","当前项目已有生成任务，请等待完成")
@@ -139,7 +160,7 @@ def create_run(conn, owner, project_id, data, idempotency_key, ip):
         error(503,"worker_unavailable","生成服务正在启动，请稍后重试")
     try:
         if not recoverable and row["kind"]!="video":
-            require_balance(conn,owner)
+            require_balance(conn,owner,len(data.prompt.encode("utf-8")))
     except CreditError as e:
         error(402,e.code,str(e))
     rid = uid()

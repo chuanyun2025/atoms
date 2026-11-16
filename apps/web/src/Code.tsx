@@ -15,11 +15,15 @@ type CodeProps = {
 };
 
 const editMode=(editable:boolean)=>[EditorState.readOnly.of(!editable),EditorView.editable.of(editable)];
+const editorTheme=EditorView.theme({"&":{height:"100%",fontSize:"12px"},".cm-scroller":{overflow:"auto",fontFamily:"'Cascadia Code',Consolas,monospace"},".cm-content":{padding:"16px 0"},".cm-gutters":{backgroundColor:"#fafafa",borderRight:"1px solid #eceef1"},".cm-line":{padding:"0 18px"}});
 
 export default function Code({files,edits,editable,onEdit}:CodeProps){
   const [selection,setFile]=useState<string>(),[filter,setFilter]=useState("");
   const node=useRef<HTMLDivElement>(null);
   const editor=useRef<EditorView>(null);
+  const states=useRef(new Map<string,EditorState>());
+  const activeFile=useRef("");
+  const prevFiles=useRef(files);
   const mode=useRef(new Compartment()).current;
   const props=useRef({edits,editable,onEdit});
   props.current={edits,editable,onEdit};
@@ -28,21 +32,47 @@ export default function Code({files,edits,editable,onEdit}:CodeProps){
   const defaultFile=["src/App.tsx","index.html"].find(path=>Object.hasOwn(files,path))??paths[0]??"";
   const file=selection && Object.hasOwn(files,selection)?selection:defaultFile;
   useEffect(()=>{
-    if(!node.current) return;
-    const view=new EditorView({parent:node.current,state:EditorState.create({doc:props.current.edits[file]??files[file]??"",extensions:[
-      mode.of(editMode(props.current.editable)),minimalSetup,lineNumbers(),highlightActiveLineGutter(),
-      EditorView.contentAttributes.of({"aria-label":file||"源码", "aria-multiline":"true"}),
-      EditorView.updateListener.of(update=>{
-        if(update.docChanged)props.current.onEdit(file,update.state.doc.toString());
-      }),
-      file.endsWith(".html")?html():file.endsWith(".css")?css():javascript({
-        typescript:/\.tsx?$/.test(file),jsx:file.endsWith(".tsx"),
-      }),
-      EditorView.theme({"&":{height:"100%",fontSize:"12px"},".cm-scroller":{overflow:"auto",fontFamily:"'Cascadia Code',Consolas,monospace"},".cm-content":{padding:"16px 0"},".cm-gutters":{backgroundColor:"#fafafa",borderRight:"1px solid #eceef1"},".cm-line":{padding:"0 18px"}})
-    ]})});
+    if(!node.current)return;
+    const view=new EditorView({parent:node.current,state:EditorState.create({doc:""})});
     editor.current=view;
-    return ()=>{view.destroy();editor.current=null};
-  },[file,files,mode]);
+    return()=>{
+      states.current.clear();
+      activeFile.current="";
+      view.destroy();
+      editor.current=null;
+    };
+  },[classic]);
+  useEffect(()=>{
+    const view=editor.current;
+    if(!view)return;
+    if(prevFiles.current!==files){
+      states.current.clear();
+      activeFile.current="";
+      prevFiles.current=files;
+    }else if(activeFile.current){
+      states.current.set(activeFile.current,view.state);
+    }
+    const targetDoc=props.current.edits[file]??files[file]??"";
+    const cached=states.current.get(file);
+    if(cached&&cached.doc.toString()===targetDoc){
+      view.setState(cached);
+      view.dispatch({effects:mode.reconfigure(editMode(props.current.editable))});
+    }else{
+      const nextState=EditorState.create({doc:targetDoc,extensions:[
+        mode.of(editMode(props.current.editable)),minimalSetup,lineNumbers(),highlightActiveLineGutter(),
+        EditorView.contentAttributes.of({"aria-label":file||"源码", "aria-multiline":"true"}),
+        EditorView.updateListener.of(update=>{
+          if(update.docChanged)props.current.onEdit(activeFile.current,update.state.doc.toString());
+        }),
+        file.endsWith(".html")?html():file.endsWith(".css")?css():javascript({
+          typescript:/\.tsx?$/.test(file),jsx:file.endsWith(".tsx"),
+        }),
+        editorTheme,
+      ]});
+      view.setState(nextState);
+    }
+    activeFile.current=file;
+  },[file,files,mode,classic]);
   useEffect(()=>{
     editor.current?.dispatch({effects:mode.reconfigure(editMode(editable))});
   },[editable,mode]);
