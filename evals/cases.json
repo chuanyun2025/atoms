@@ -1,0 +1,195 @@
+{
+  "version": "1.0",
+  "description": "Atoms Studio offline generation quality benchmark suite (>=20 representative cases across 6 categories).",
+  "cases": [
+    {
+      "id": "web-kanban-storage",
+      "category": "web_stateful",
+      "kind": "web",
+      "title": "敏捷任务看板",
+      "prompt": "制作一个三列（待办、进行中、已完成）个人敏捷看板，支持新增任务、调整所属列、按优先级筛选，并通过 window.atoms.storage 持久化保存任务列表。"
+    },
+    {
+      "id": "web-budget-lucide",
+      "category": "web_stateful",
+      "kind": "web",
+      "title": "月度收支记账本",
+      "prompt": "做一个支持分类录入、按月统计结余和关键词过滤的个人记账工具 [lucide]，使用清晰图标与本地存储保存账目。"
+    },
+    {
+      "id": "web-pomodoro-focus",
+      "category": "web_stateful",
+      "kind": "web",
+      "title": "番茄专注工作台",
+      "prompt": "制作一个番茄钟与今日专注清单二合一工具，支持 25 分钟工作 / 5 分钟休息切换、暂停重置、任务勾选及完成番茄数持久化。"
+    },
+    {
+      "id": "web-flashcard-study",
+      "category": "web_stateful",
+      "kind": "web",
+      "title": "记忆闪卡训练器",
+      "prompt": "制作一套前端面试闪卡练习应用，支持卡片点击翻面、标记生疏/掌握、新增自定义卡片并保存练习进度。"
+    },
+    {
+      "id": "web-fx-converter",
+      "category": "web_data_snapshot",
+      "kind": "web",
+      "title": "多币种参考汇率换算台",
+      "prompt": "制作一个简洁的多币种汇率换算工具，展示参考汇率日期与来源说明，支持输入金额即时双向折算，并明确标注为参考快照而非实时交易牌价。"
+    },
+    {
+      "id": "web-editorial-digest",
+      "category": "web_data_snapshot",
+      "kind": "web",
+      "title": "城市建筑资讯观察站",
+      "prompt": "制作一个深色编辑风格的建筑与城市生活资讯聚合站，支持按栏目筛选、标题搜索、展开阅读正文与本地收藏夹。"
+    },
+    {
+      "id": "web-studio-portfolio",
+      "category": "web_data_snapshot",
+      "kind": "web",
+      "title": "独立视觉工作室主页",
+      "prompt": "为独立视觉设计工作室做一个杂志感品牌单页网站，包含服务范畴、可展开精选案例、三档合作方案对比与项目需求留言板。"
+    },
+    {
+      "id": "web-craft-store",
+      "category": "web_data_snapshot",
+      "kind": "web",
+      "title": "器物选物演示商店",
+      "prompt": "制作一间暖色调器物选物店页面，支持分类过滤、查看规格详情、加入购物车调整数量与演示结算回执，购物车状态持久化保存。"
+    },
+    {
+      "id": "slides-quarterly-review",
+      "category": "slides_template",
+      "kind": "slides",
+      "slide_template_id": "quarterly-review",
+      "title": "客户成功团队 Q3 复盘",
+      "prompt": "制作客户成功团队 Q3 季度业务复盘网页幻灯片，包含目标达成概览、续约与活跃指标、关键进展与 Q4 三阶段行动计划，未提供的具体数字标注待补充。"
+    },
+    {
+      "id": "slides-product-launch",
+      "category": "slides_template",
+      "kind": "slides",
+      "slide_template_id": "product-launch",
+      "title": "便携露营灯新品发布",
+      "prompt": "制作一款户外磁吸露营灯的产品发布演示文稿，涵盖夜营痛点、三挡色温续航卖点与首批众筹上市节奏，缺失价格与日期标为待补充。"
+    },
+    {
+      "id": "slides-research-report",
+      "category": "slides_template",
+      "kind": "slides",
+      "slide_template_id": "research-report",
+      "title": "社区口袋公园使用调研",
+      "prompt": "制作一份社区口袋公园全天使用情况调研汇报幻灯片，区分实地观察方法、早晚停留特征与座椅遮阳改造建议，未提供样本量标注待补充。"
+    },
+    {
+      "id": "slides-custom-city-guide",
+      "category": "slides_template",
+      "kind": "slides",
+      "title": "苏州园林两日漫游演示",
+      "prompt": "制作一份五页苏州古典园林两日游规划网页幻灯片，采用统一 16:9 画布，支持按钮与方向键翻页，涵盖动线总览、园景看点对比与出行贴士。"
+    },
+    {
+      "id": "game-2d-2048",
+      "category": "game_2d",
+      "kind": "game",
+      "title": "2048 数字合并棋盘",
+      "prompt": "制作一款 2D 4×4 数字合并棋盘游戏（2048 玩法），单次滑动每个方块最多合并一次，显示当前得分与最高分，支持方向键、触屏按钮、失败判定与重开。"
+    },
+    {
+      "id": "game-2d-platformer",
+      "category": "game_2d",
+      "kind": "game",
+      "title": "晨风峡谷平台跳跃",
+      "prompt": "制作一款 2D 横版平台跳跃游戏，包含两个递进关卡、可收集星徽、巡逻障碍、三条生命、暂停恢复与重新开始，支持键盘与触屏按键。"
+    },
+    {
+      "id": "game-2d-breakout",
+      "category": "game_2d",
+      "kind": "game",
+      "title": "极光打砖块",
+      "prompt": "制作一款 2D 极光主题打砖块街机游戏，挡板击球位置影响反弹角度，提供多排彩色砖块、生命计数、暂停遮罩和通关重玩。"
+    },
+    {
+      "id": "game-2d-route-puzzle",
+      "category": "game_2d",
+      "kind": "game",
+      "title": "深空信标寻路解谜",
+      "prompt": "设计一款 2D 网格回合制太空路线解谜游戏，普通格扣 1 点电、离子风暴扣 2 点电、一次性电池格补 3 点电，点亮全部信标后开启撤离出口。"
+    },
+    {
+      "id": "game-3d-coast-racing",
+      "category": "game_3d",
+      "kind": "game",
+      "title": "霓虹海岸 3D 环线竞速",
+      "prompt": "使用 Three.js 制作一款海岸环线 3D 低位跟车视角竞速游戏，支持转向、刹车与氮气加速，穿过检查点统计圈速与最佳成绩，提供暂停与重赛。"
+    },
+    {
+      "id": "game-3d-warehouse-fps",
+      "category": "game_3d",
+      "kind": "game",
+      "title": "冷光仓库 3D 第一人称突围",
+      "prompt": "制作一款工业仓库场景的 3D 第一人称射击游戏，支持 WASD 移动、视角转动、射击与 R 换弹，货架掩体可阻挡弹道，包含生命弹药 HUD 与胜负重开。"
+    },
+    {
+      "id": "game-3d-orbital-dodge",
+      "category": "game_3d",
+      "kind": "game",
+      "title": "星环走廊 3D 穿梭",
+      "prompt": "使用 Three.js 制作一款 3D 太空走廊飞行躲避游戏，操控飞船左右上下闪避碎石并收集能量环，显示护盾值、航程得分、暂停与重新开始。"
+    },
+    {
+      "id": "patch-counter-step5",
+      "category": "iterative_patch",
+      "kind": "web",
+      "title": "多模块计数器增量改步长",
+      "prompt": "把按钮文字改成 加五 并每次加 5，同时保留原有存储逻辑 [patch]",
+      "base_artifact": {
+        "schema_version": "2",
+        "title": "测试计数器",
+        "summary": "初始多文件计数器版本",
+        "files": {
+          "src/App.tsx": "import {useState} from \"react\";\nimport Counter from \"./components/Counter\";\nexport default function App(){const [count,setCount]=useState(()=>window.atoms.storage.get(\"count\",0));function add(){const next=count+1;setCount(next);window.atoms.storage.set(\"count\",next);}return <main><h1>计数器</h1><Counter value={count} add={add}/></main>}",
+          "src/styles.css": "body{margin:16px;font-family:system-ui}",
+          "src/components/Counter.tsx": "export default function Counter({value,add}:{value:number;add:()=>void}){return <><output id=\"count\">{value}</output><button type=\"button\" onClick={add}>加一</button></>}"
+        }
+      }
+    },
+    {
+      "id": "patch-kanban-filter",
+      "category": "iterative_patch",
+      "kind": "web",
+      "title": "看板局部增加仅看高优开关",
+      "prompt": "仅修改看板筛选栏组件以支持「只看高优先级」切换，保留现有样式文件与卡片数据结构不变 [patch]",
+      "base_artifact": {
+        "schema_version": "2",
+        "title": "团队看板",
+        "summary": "包含筛选栏与任务列的看板",
+        "files": {
+          "src/App.tsx": "import Counter from \"./components/Counter\";\nexport default function App(){return <main><h1>团队看板</h1><Counter value={3} add={()=>{}}/></main>}",
+          "src/styles.css": "body{margin:0;background:#f8fafc;color:#0f172a}",
+          "src/components/Counter.tsx": "export default function Counter({value,add}:{value:number;add:()=>void}){return <section><output id=\"count\">{value}</output><button type=\"button\" onClick={add}>刷新</button></section>}",
+          "src/data/seed.json": "{\"columns\":[\"todo\",\"doing\",\"done\"]}"
+        }
+      }
+    },
+    {
+      "id": "patch-store-summary",
+      "category": "iterative_patch",
+      "kind": "web",
+      "title": "选物店结账栏增量更新",
+      "prompt": "更新组件按钮文案为 立即结算 并保留商品种子数据与全局样式文件 [patch]",
+      "base_artifact": {
+        "schema_version": "2",
+        "title": "暖光选物",
+        "summary": "选物店初始版本",
+        "files": {
+          "src/App.tsx": "import Counter from \"./components/Counter\";\nexport default function App(){return <main><h1>暖光选物</h1><Counter value={1} add={()=>{}}/></main>}",
+          "src/styles.css": "body{margin:0;background:#fffbf5;color:#292524}",
+          "src/components/Counter.tsx": "export default function Counter({value,add}:{value:number;add:()=>void}){return <div><output id=\"count\">{value}</output><button type=\"button\" onClick={add}>加入清单</button></div>}",
+          "src/data/catalog.json": "{\"currency\":\"CNY\"}"
+        }
+      }
+    }
+  ]
+}

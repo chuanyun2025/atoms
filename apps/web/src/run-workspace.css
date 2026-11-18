@@ -56,3 +56,40 @@
 .source-saved-notice > div { display: flex; align-items: center; gap: 8px; }
 .source-saved-notice svg { flex-shrink: 0; }
 .source-saved-notice button { color: inherit; }
+
+.version-result-wrap { display: flex; flex-direction: column; gap: 6px; margin-top: 9px; }
+.version-result-wrap .version-result-card { margin-top: 0; }
+.inspector-drawer { font-size: 11.5px; color: #394968; }
+.run-progress .inspector-drawer { margin-top: 9px; padding-top: 8px; border-top: 1px solid #e3eae4; }
+.version-result-wrap .inspector-drawer { border: 1px solid #dce4f7; border-radius: 8px; background: #f8faff; padding: 6px 10px; }
+.inspector-drawer.inspector-panel { flex-shrink: 0; background: #f7f9fe; border-bottom: 1px solid #dfe5f2; padding: 6px 14px; }
+.inspector-drawer > summary { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-weight: 600; color: #3b5079; list-style: none; cursor: pointer; user-select: none; }
+.inspector-drawer > summary::-webkit-details-marker { display: none; }
+.inspector-drawer > summary > span { display: inline-flex; align-items: center; gap: 6px; }
+.inspector-drawer[open] > summary > svg { transform: rotate(180deg); }
+.inspector-body { margin-top: 9px; display: grid; gap: 10px; max-height: 320px; overflow-y: auto; padding-right: 4px; }
+.inspector-panel .inspector-body { grid-template-columns: repeat(auto-fit,minmax(240px,1fr)); max-height: 250px; padding-bottom: 4px; }
+.inspector-section { background: #fff; border: 1px solid #e2e8f4; border-radius: 8px; padding: 9px 11px; }
+.inspector-section h4 { margin: 0 0 6px; font-size: 11.5px; color: #223253; }
+.inspector-muted { margin: 0; color: #67758f; display: flex; align-items: center; gap: 6px; line-height: 1.5; }
+.inspector-badges { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 6px; }
+.inspector-badges span { font-size: 10.5px; background: #eef2fc; color: #314b8c; border-radius: 5px; padding: 2px 6px; }
+.inspector-text { margin: 0 0 5px; line-height: 1.55; color: #435270; }
+.inspector-list { margin: 4px 0 0; padding-left: 16px; line-height: 1.55; color: #435270; }
+.inspector-mechanics { margin-top: 7px; padding-top: 6px; border-top: 1px dashed #e0e6f2; display: flex; flex-direction: column; gap: 3px; }
+.inspector-mechanics strong { font-size: 11px; color: #2b3f6b; }
+.inspector-mechanics p { margin: 0; line-height: 1.5; color: #495978; }
+.inspector-kv-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 6px 10px; }
+.inspector-kv-grid span { display: block; font-size: 10.5px; color: #697894; }
+.inspector-kv-grid strong { font-size: 11.5px; color: #223150; }
+.inspector-kv-grid strong.positive { color: #256f46; }
+.inspector-repairs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
+.inspector-repairs li { background: #fffaf3; border: 1px solid #f2dfc2; border-radius: 6px; padding: 6px 8px; }
+.inspector-repair-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.inspector-repair-head code { font-size: 10.5px; color: #9c4a0c; background: #fdebd3; border-radius: 4px; padding: 1px 5px; }
+.inspector-repair-head span { font-family: monospace; font-size: 10.5px; color: #7a5836; }
+.inspector-subject { margin: 3px 0 0; font-size: 11px; color: #6b4b2a; }
+.inspector-strategy { margin: 3px 0 0; font-size: 11px; color: #4d5d7a; }
+.inspector-calls { display: flex; flex-direction: column; gap: 4px; }
+.inspector-call-row { display: grid; grid-template-columns: auto auto 1fr auto; gap: 8px; align-items: center; padding: 4px 6px; background: #f8faff; border-radius: 5px; font-variant-numeric: tabular-nums; }
+.inspector-totals { margin-top: 7px; padding-top: 6px; border-top: 1px solid #e5eaf5; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; font-variant-numeric: tabular-nums; }

@@ -1,152 +1,40 @@
-import {useEffect,useRef,useState} from "react";
-import {ArrowDown,ArrowLeft,ArrowRight,ArrowUp,Pause,Play,RotateCcw} from "lucide-react";
+import {lazy,Suspense,useEffect,useState} from "react";
+import {AlertCircle,ArrowRight,CheckCircle2,Code2,Eye,History,LoaderCircle,Wrench} from "lucide-react";
+import {publicGet} from "./api";
+import {modes} from "./creationModes";
 import Breakout from "./Breakout";
+import breakoutRaw from "./Breakout.tsx?raw";
 import OrbitCourier from "./game-examples/OrbitCourier";
+import orbitRaw from "./game-examples/OrbitCourier.tsx?raw";
 import TidalFlight from "./game-examples/TidalFlight";
+import tidalRaw from "./game-examples/TidalFlight.tsx?raw";
+import {MemoryDemo,SnakeDemo} from "./game-examples/MiniArcade";
+import miniArcadeRaw from "./game-examples/MiniArcade.tsx?raw";
 import Preview from "./Preview";
 import {type StudioExample} from "./studioExamples";
 
-const faces=["☀","☾","✦","♄","☄","❋"];
-function shuffledCards() {
-  const cards=[...faces,...faces];
-  for (let i=cards.length-1;i>0;i--) {
-    const j=Math.floor(Math.random()*(i+1));
-    [cards[i],cards[j]]=[cards[j],cards[i]];
-  }
-  return cards;
+const Code=lazy(()=>import("./Code"));
+const emptyEdits:Record<string,string>={};
+const publishedSourceCache=new Map<string,Record<string,string>>();
+
+function trimCredits(value:string) {
+  return value.replace(/(\.\d*?[1-9])0+$/,"$1").replace(/\.000000$/,".00");
 }
 
-function MemoryDemo() {
-  const [cards,setCards]=useState(shuffledCards);
-  const [open,setOpen]=useState<number[]>([]);
-  const [matched,setMatched]=useState<number[]>([]);
-  const [moves,setMoves]=useState(0);
-  useEffect(()=>{
-    if (open.length!==2) return;
-    const pair=cards[open[0]]===cards[open[1]];
-    const timer=window.setTimeout(()=>{
-      if (pair) setMatched(previous=>[...previous,...open]);
-      setOpen([]);
-    },pair?280:720);
-    return ()=>window.clearTimeout(timer);
-  },[cards,open]);
-  function flip(index:number) {
-    if (open.length===2 || open.includes(index) || matched.includes(index)) return;
-    if (open.length===1) setMoves(value=>value+1);
-    setOpen(previous=>[...previous,index]);
+function builtinSourceFiles(example:StudioExample):Record<string,string>|undefined {
+  switch (example.id) {
+    case "breakout":
+      return {"src/App.tsx":breakoutRaw};
+    case "orbit":
+      return {"src/App.tsx":orbitRaw};
+    case "tidal":
+      return {"src/App.tsx":tidalRaw};
+    case "memory":
+    case "snake":
+      return {"src/App.tsx":miniArcadeRaw};
+    default:
+      return undefined;
   }
-  function reset() {
-    setCards(shuffledCards());
-    setOpen([]);
-    setMatched([]);
-    setMoves(0);
-  }
-  return <div className="sample-memory">
-    <div className="sample-game-heading">
-      <span>{matched.length===cards.length?"配对完成":"翻两张牌，找出相同星象"}</span>
-      <strong aria-live="polite">步数 {moves} · 配对 {matched.length/2} / {faces.length}</strong>
-    </div>
-    <div className="memory-grid">
-      {cards.map((face,index)=>{
-        const revealed=open.includes(index)||matched.includes(index);
-        return <button type="button" key={index} className={revealed?"revealed":""}
-          aria-label={"牌 "+(index+1)+(revealed?" "+face:"")} aria-pressed={revealed}
-          disabled={matched.includes(index)} onClick={()=>flip(index)}>
-          {revealed?face:"✧"}
-        </button>;
-      })}
-    </div>
-    <button className="sample-reset" type="button" onClick={reset}><RotateCcw size={14}/>重新洗牌</button>
-  </div>;
-}
-
-const size=12;
-const directions={
-  ArrowUp:{x:0,y:-1,label:"向上",Icon:ArrowUp},
-  ArrowDown:{x:0,y:1,label:"向下",Icon:ArrowDown},
-  ArrowLeft:{x:-1,y:0,label:"向左",Icon:ArrowLeft},
-  ArrowRight:{x:1,y:0,label:"向右",Icon:ArrowRight},
-};
-type Direction=keyof typeof directions;
-function newSnake() {
-  return {body:[{x:4,y:5},{x:3,y:5},{x:2,y:5}],food:{x:7,y:5},direction:"ArrowRight" as Direction,score:0};
-}
-
-function SnakeDemo() {
-  const [snake,setSnake]=useState(newSnake);
-  const [phase,setPhase]=useState<"ready"|"playing"|"paused"|"over"|"won">("ready");
-  const world=useRef(snake);
-  const pending=useRef<Direction>("ArrowRight");
-  const board=useRef<HTMLDivElement>(null);
-  function move(key:Direction) {
-    const current=directions[world.current.direction];
-    const next=directions[key];
-    if (next.x+current.x!==0 || next.y+current.y!==0) pending.current=key;
-  }
-  function start() {
-    if (phase!=="paused") {
-      world.current=newSnake();
-      pending.current=world.current.direction;
-      setSnake(world.current);
-    }
-    setPhase("playing");
-  }
-  useEffect(()=>{
-    if (phase!=="playing") return;
-    board.current?.focus({preventScroll:true});
-    const pause=()=>setPhase("paused");
-    const onVisibility=()=>{if (document.hidden) pause()};
-    window.addEventListener("blur",pause);
-    document.addEventListener("visibilitychange",onVisibility);
-    const timer=window.setInterval(()=>{
-      const state=world.current;
-      const direction=pending.current;
-      const movement=directions[direction];
-      const head={x:state.body[0].x+movement.x,y:state.body[0].y+movement.y};
-      const eats=head.x===state.food.x && head.y===state.food.y;
-      const remaining=eats?state.body:state.body.slice(0,-1);
-      if (head.x<0 || head.x>=size || head.y<0 || head.y>=size || remaining.some(cell=>cell.x===head.x && cell.y===head.y)) {
-        setPhase("over");
-        return;
-      }
-      const body=[head,...remaining];
-      const free=eats?Array.from({length:size*size},(_,i)=>({x:i%size,y:Math.floor(i/size)}))
-        .filter(cell=>!body.some(part=>part.x===cell.x && part.y===cell.y)):[];
-      const food=eats && free.length?free[Math.floor(Math.random()*free.length)]:state.food;
-      world.current={body,food,direction,score:state.score+(eats?1:0)};
-      setSnake(world.current);
-      if (eats && free.length===0) setPhase("won");
-    },220);
-    return ()=>{
-      window.clearInterval(timer);
-      window.removeEventListener("blur",pause);
-      document.removeEventListener("visibilitychange",onVisibility);
-    };
-  },[phase]);
-  return <div className="sample-snake">
-    <div className="sample-game-heading"><span>收集网格中的能量</span><strong aria-live="polite">得分 {snake.score}</strong></div>
-    <div className="snake-board" ref={board} tabIndex={0} aria-label="贪吃蛇游戏区域，使用方向键控制"
-      onKeyDown={event=>{
-        if (phase==="playing" && Object.hasOwn(directions,event.key)) {
-          event.preventDefault();
-          move(event.key as Direction);
-        }
-      }}>
-      {snake.body.map((cell,index)=><i key={index} aria-hidden="true" className={index===0?"snake-head":"snake-segment"} style={{left:cell.x/size*100+"%",top:cell.y/size*100+"%"}}/>)}
-      <i className="snake-food" aria-hidden="true" style={{left:snake.food.x/size*100+"%",top:snake.food.y/size*100+"%"}}/>
-      {phase!=="playing" && <div className="snake-overlay">
-        {phase==="over" && <span>本局结束</span>}{phase==="won" && <span>完成挑战</span>}
-        <button type="button" onClick={start}><Play size={14}/>{phase==="paused"?"继续游戏":phase==="ready"?"开始游戏":"再玩一次"}</button>
-      </div>}
-    </div>
-    <div className="sample-toolbar">
-      {(Object.keys(directions) as Direction[]).map(key=>{
-        const {Icon,label}=directions[key];
-        return <button type="button" key={key} disabled={phase!=="playing"} aria-label={label} onClick={()=>move(key)}><Icon size={16}/></button>;
-      })}
-      <button type="button" disabled={phase!=="playing"} aria-label="暂停贪吃蛇" onClick={()=>setPhase("paused")}><Pause size={15}/></button>
-    </div>
-  </div>;
 }
 
 export default function ExamplePreview({example}:{example:StudioExample}) {
@@ -160,4 +48,110 @@ export default function ExamplePreview({example}:{example:StudioExample}) {
     case "orbit": return <OrbitCourier/>;
     case "tidal": return <TidalFlight/>;
   }
+}
+
+type ShowcaseView="preview"|"source"|"story";
+
+export function ExampleShowcase({example,busy,onUsePrompt}:{example:StudioExample;busy:boolean;onUsePrompt:(prompt:string)=>void}) {
+  const [view,setView]=useState<ShowcaseView>("preview");
+  const [files,setFiles]=useState<Record<string,string>|undefined>(()=>
+    example.publishedExample?publishedSourceCache.get(example.publishedExample):builtinSourceFiles(example));
+  const [sourceError,setSourceError]=useState("");
+
+  useEffect(()=>{
+    setView("preview");
+    setSourceError("");
+    setFiles(example.publishedExample?publishedSourceCache.get(example.publishedExample):builtinSourceFiles(example));
+  },[example]);
+
+  useEffect(()=>{
+    if(view!=="source"||!example.publishedExample||files)return;
+    let cancelled=false;
+    setSourceError("");
+    publicGet<{files:Record<string,string>}>("/examples/"+example.publishedExample+"/source")
+      .then(data=>{
+        publishedSourceCache.set(example.publishedExample!,data.files);
+        if(!cancelled)setFiles(data.files);
+      })
+      .catch(e=>{if(!cancelled)setSourceError((e as Error).message||"源码加载失败")});
+    return ()=>{cancelled=true};
+  },[view,example,files]);
+
+  const story=example.buildStory;
+  return <div className="example-showcase">
+    <div className="example-showcase-bar">
+      <div className="view-tabs" role="group" aria-label="示例查看模式">
+        <button type="button" className={view==="preview"?"selected":""} aria-pressed={view==="preview"} onClick={()=>setView("preview")}><Eye size={14}/>交互预览</button>
+        <button type="button" className={view==="source"?"selected":""} aria-pressed={view==="source"} onClick={()=>setView("source")}><Code2 size={14}/>只读源码</button>
+        {story&&<button type="button" className={view==="story"?"selected":""} aria-pressed={view==="story"} onClick={()=>setView("story")}><History size={14}/>构建回放</button>}
+      </div>
+      <span className="example-zero-cost">本地静态快照 · 零积分消耗</span>
+    </div>
+    <div className="example-modal-content">
+      <div className="example-interactive">
+        {view==="preview"&&<ExamplePreview example={example}/>}
+        {view==="source"&&<div className="example-source-view">
+          {sourceError?<div className="inline-error" role="alert"><AlertCircle size={15}/>{sourceError}</div>
+            :!files?<div className="preview-loading" role="status"><LoaderCircle size={18} className="spin"/>正在读取多文件源码…</div>
+            :<Suspense fallback={<div className="preview-loading">正在加载代码查看器…</div>}>
+              <Code files={files} edits={emptyEdits} editable={false} onEdit={()=>{}}/>
+            </Suspense>}
+        </div>}
+        {view==="story"&&story&&<section className="build-story-view" aria-label="构建过程回放">
+          <div className="build-story-metrics">
+            <div><span>端到端耗时</span><strong>{story.elapsedSeconds.toFixed(1)}s</strong></div>
+            <div><span>模型调用</span><strong>{story.modelCalls} 次</strong></div>
+            <div><span>自动修复</span><strong>{story.repairRounds?story.repairRounds+" 轮":"一次通过"}</strong></div>
+            <div><span>输入 / 输出 Token</span><strong>{story.inputTokens.toLocaleString()} / {story.outputTokens.toLocaleString()}</strong></div>
+            <div><span>实扣积分</span><strong>{trimCredits(story.credits)} 积分</strong></div>
+          </div>
+          <div className="build-story-card">
+            <h3>真实首轮输入提示词</h3>
+            <p className="build-story-prompt">{story.originalPrompt}</p>
+          </div>
+          <div className="build-story-card">
+            <h3>主 Agent 规划摘要</h3>
+            <p>{story.planSummary}</p>
+            {!!story.requirements.length&&<ul className="inspector-list">
+              {story.requirements.map((req,idx)=><li key={idx}>{req}</li>)}
+            </ul>}
+            <div className="build-story-tags">
+              <span className="story-stack-chip">{story.rendering}</span>
+              {story.architecture.map(path=><code key={path}>{path}</code>)}
+            </div>
+          </div>
+          <div className="build-story-card">
+            <h3>规划 · 校验 · 自修复真实时间轴{story.runCount>1?`（含继续恢复共 ${story.runCount} 次任务）`:""}</h3>
+            <ol className="build-story-timeline">
+              {story.stages.map((step,index)=><li key={index} className={"story-step phase-"+step.phase}>
+                <span className="story-step-icon">{step.diagnostic||step.phase==="repairing"?<Wrench size={13}/>:<CheckCircle2 size={13}/>}</span>
+                <div>
+                  <div className="story-step-head">
+                    <strong>{step.label}</strong>
+                    <span>{step.runIndex?`run#${step.runIndex} · `:""}{step.phase}</span>
+                  </div>
+                  <p>{step.detail}</p>
+                  {step.diagnostic&&<div className="story-diagnostic">
+                    <div><code>{step.diagnostic.code}</code>{step.diagnostic.location&&<span>{step.diagnostic.location}</span>}</div>
+                    <p>{step.diagnostic.detail}</p>
+                  </div>}
+                </div>
+              </li>)}
+            </ol>
+          </div>
+        </section>}
+      </div>
+      <div className="example-modal-aside">
+        <span className="studio-output">{modes[example.kind].output}</span>
+        <p>{example.description}</p>
+        {story?<div className="example-aside-meta">
+          <span>真实耗时 {story.elapsedSeconds.toFixed(1)}s · {trimCredits(story.credits)} 积分</span>
+          <span>{story.repairRounds?`含 ${story.repairRounds} 轮自动修复`:"首轮校验通过"}</span>
+        </div>:<div className="example-aside-meta">
+          <span>内置原生交互组件示例</span>
+        </div>}
+        <button type="button" className="studio-submit" disabled={busy} onClick={()=>onUsePrompt(example.prompt)}>使用此示例的提示词 <ArrowRight size={15}/></button>
+      </div>
+    </div>
+  </div>;
 }

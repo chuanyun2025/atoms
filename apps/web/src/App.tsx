@@ -1,7 +1,7 @@
 import {lazy,Suspense,useCallback,useEffect,useRef,useState,type FormEvent,type ReactNode} from "react";
 import {Link,NavLink,Route,Routes,useParams} from "react-router-dom";
 import Modal from "./Modal";
-import WalletButton,{useWallet} from "./Wallet";
+import WalletButton,{openWalletDialog,useWallet} from "./Wallet";
 import {useQuery,useQueryClient} from "@tanstack/react-query";
 import {ArrowUp,Plus,Layers3,PanelLeftClose,PanelLeftOpen,Settings2,ChevronDown,Check,CheckCircle2,Code2,Eye,Download,History,Monitor,Smartphone,RotateCcw,X,Sparkles,LayoutGrid,ArrowLeft,LoaderCircle,AlertCircle,Braces,House,Menu,ChevronRight,Save,Square} from "lucide-react";
 import {api,active,ApiError,date,key,type Message,type Project,type ProjectKind,type Run,type RunSource,type Version} from "./api";
@@ -13,6 +13,7 @@ import BuildFailure from "./BuildFailure";
 import SlideTemplateDetail from "./SlideTemplateDetail";
 import {VideoStudio,VideoWorkspace} from "./VideoStudio";
 import RunProgress,{useRunProgress} from "./RunProgress";
+import InspectorDrawer from "./InspectorPanel";
 import "./run-workspace.css";
 
 function Brand({compact=false}:{compact?:boolean}){
@@ -300,17 +301,20 @@ function Workspace(){
             onPreview={retainedPreview&&runId===message.run_id?()=>{setSelected(null);setSelectedDraft(runId);switchTab("preview")}:undefined}
             onEdit={()=>{setPrompt(originalPrompt());document.getElementById("chat-prompt")?.focus()}}/>
           : <div className="message-content">{message.content}</div>}
-          {result && <div className="version-result-card">
-            <span>版本 v{result.number} 已生成</span>
-            <button type="button" aria-label={"查看版本 v"+result.number+" 预览"} onClick={()=>{setHistory(false);showVersion(result.id)}}><Eye size={14}/>查看预览</button>
+          {result && <div className="version-result-wrap">
+            <div className="version-result-card">
+              <span>版本 v{result.number} 已生成</span>
+              <button type="button" aria-label={"查看版本 v"+result.number+" 预览"} onClick={()=>{setHistory(false);showVersion(result.id)}}><Eye size={14}/>查看预览</button>
+            </div>
+            <InspectorDrawer runId={result.source_run_id} label={"v"+result.number+" 工程透视"} variant="inline"/>
           </div>}
         </article>;
       })}
-      <RunProgress events={progress?.events??[]} stage={run?.stage} eventSeq={run?.event_seq} connection={progress?.connection} busy={busy}
+      <RunProgress runId={runId} events={progress?.events??[]} stage={run?.stage} eventSeq={run?.event_seq} connection={progress?.connection} busy={busy}
         onCode={source?()=>switchTab("code"):undefined}
         onPreview={draftPreview?()=>switchTab("preview"):undefined}/>
       <div ref={bottom}/></div>
-      <div className="chat-compose-area">{wallet&&wallet.available_units<100&&<div className="capability-warning">可用积分不足；已有预览、版本和导出仍可使用。</div>}{!cap?.model_configured&&<div className="capability-warning"><AlertCircle size={15}/><span>模型待配置，连接后即可生成应用。</span></div>}{cap?.read_only&&<div className="capability-warning">系统维护中，当前只读。</div>}{error&&<div className="inline-error" role="alert">{error}<button aria-label="关闭错误" onClick={()=>setError("")}><X size={13}/></button></div>}
+      <div className="chat-compose-area">{wallet&&wallet.available_units<100&&<div className="capability-warning">可用积分不足；已有预览、版本和导出仍可使用。</div>}{cap?.guardrails?.daily_budget_reached&&<div className="capability-warning"><span>今日公共体验额度已达上限；当前项目预览、源码编辑和导出仍正常可用。</span><button type="button" className="plain-button" onClick={openWalletDialog}>输入体验码</button></div>}{!cap?.model_configured&&<div className="capability-warning"><AlertCircle size={15}/><span>模型待配置，连接后即可生成应用。</span></div>}{cap?.read_only&&<div className="capability-warning">系统维护中，当前只读。</div>}{error&&<div className="inline-error" role="alert">{error}<button aria-label="关闭错误" onClick={()=>setError("")}><X size={13}/></button></div>}
       <form className="chat-composer" onSubmit={submit}>
         <label className="sr-only" htmlFor="chat-prompt">描述需求或修改</label>
         <textarea id="chat-prompt" placeholder={project?.current_version_id?"描述下一步修改…":"详细描述你想创建的应用…"} maxLength={100000} value={prompt} onChange={e=>setPrompt(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&(e.ctrlKey||e.metaKey)){e.preventDefault();e.currentTarget.form?.requestSubmit()}}}/>
@@ -344,6 +348,7 @@ function Workspace(){
         </div>
       </div>
       {historical&&<div className="history-banner"><History size={14}/><span>正在查看历史 v{version?.number}，业务数据只读</span><button onClick={()=>setSelected(null)}>回到当前</button><button disabled={busy||savingSource||cap?.read_only} onClick={()=>version&&setRestore(version)}>恢复此版本</button></div>}
+      {!showingDraft&&version?.source_run_id&&<InspectorDrawer runId={version.source_run_id} label={"版本 v"+version.number+" · 工程透视"} variant="panel"/>}
       {displayTab==="code"&&files&&!source&&(editableSource||hasEdits)&&<div className="source-tools">
         <div className="source-toolbar">
           <span role="status">{savingSource?"正在校验并打包…":hasEdits?"有未保存的修改":"编辑后可保存为新版本"}</span>

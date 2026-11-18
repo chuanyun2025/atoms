@@ -1,317 +1,416 @@
 import asyncio
 import json
 import uuid
+
 import httpx
 import pytest
-from atoms import worker
-from atoms.build_diagnostics import BuildIssue
-from atoms.db import transaction,one,execute,compact
-from atoms.model import ModelError,ModelResult,Usage
-from atoms.worker import claim,fail,keep_candidate,execute_run,LeaseLost
-from conftest import create_project,submit
-from test_workflow import ARTIFACT,VALIDATION,complete
+from conftest import create_project, submit
+from test_workflow import ARTIFACT, VALIDATION, complete
+
+from atoms.core.db import compact, execute, one, transaction
+from atoms.runtime import worker
+from atoms.runtime.build_diagnostics import BuildIssue
+from atoms.runtime.model import ModelError, ModelResult, Usage
+from atoms.runtime.worker import LeaseLost, claim, execute_run, fail, keep_candidate
 
 
-def failed_candidate(client,p,raw=None):
-    result=submit(client,p["id"])
-    assert result.status_code==202
-    run=claim("test-leader")
+def failed_candidate(client, p, raw=None):
+    result = submit(client, p["id"])
+    assert result.status_code == 202
+    run = claim("test-leader")
     if raw is not None:
-        keep_candidate(run,raw,"不支持的 HTML 属性：list",1)
-    fail(run,"VALIDATION_FAILED","代码未通过校验：不支持的 HTML 属性：list")
+        keep_candidate(run, raw, "不支持的 HTML 属性：list", 1)
+    fail(run, "VALIDATION_FAILED", "代码未通过校验：不支持的 HTML 属性：list")
     return run
 
 
-def retry(client,p,source,prompt=None):
-    return client.post("/api/v1/projects/"+p["id"]+"/runs",
-        json={"prompt":prompt or source["prompt"],"expected_revision":p["revision"],
-              "base_version_id":p["current_version_id"],"retry_of_run_id":source["id"]},
-        headers={"Idempotency-Key":uuid.uuid4().hex})
+def retry(client, p, source, prompt=None):
+    return client.post(
+        "/api/v1/projects/" + p["id"] + "/runs",
+        json={
+            "prompt": prompt or source["prompt"],
+            "expected_revision": p["revision"],
+            "base_version_id": p["current_version_id"],
+            "retry_of_run_id": source["id"],
+        },
+        headers={"Idempotency-Key": uuid.uuid4().hex},
+    )
 
 
-def validator(monkeypatch,results):
-    original=httpx.AsyncClient
-    responses=iter(results)
+def validator(monkeypatch, results):
+    original = httpx.AsyncClient
+    responses = iter(results)
+
     def handle(request):
-        assert request.url.path=="/internal/validate"
-        return httpx.Response(200,json=next(responses))
-    monkeypatch.setattr(httpx,"AsyncClient",lambda **kwargs:original(transport=httpx.MockTransport(handle)))
+        assert request.url.path == "/internal/validate"
+        return httpx.Response(200, json=next(responses))
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: original(transport=httpx.MockTransport(handle)))
 
 
 def test_equivalent_sandbox_sites_get_a_new_budget_when_one_is_removed():
-    failures={}
-    for occurrences in (3,2,1):
-        issue=BuildIssue.from_validator({"error":"原生提交","diagnostic":{
-            "code":"SANDBOX_FORM_SUBMIT","file":"src/App.tsx","subject":"onSubmit@App#same","occurrences":occurrences,
-        }})
-        assert issue.repair("draft",failures,remaining=True)["repeated_failure"] is False
-    assert issue.repair("draft",failures,remaining=True)["repeated_failure"] is True
-    with pytest.raises(ModelError,match="尝试修复 2 次后仍未通过"):
-        issue.repair("draft",failures,remaining=True)
+    failures = {}
+    for occurrences in (3, 2, 1):
+        issue = BuildIssue.from_validator(
+            {
+                "error": "原生提交",
+                "diagnostic": {
+                    "code": "SANDBOX_FORM_SUBMIT",
+                    "file": "src/App.tsx",
+                    "subject": "onSubmit@App#same",
+                    "occurrences": occurrences,
+                },
+            }
+        )
+        assert issue.repair("draft", failures, remaining=True)["repeated_failure"] is False
+    assert issue.repair("draft", failures, remaining=True)["repeated_failure"] is True
+    with pytest.raises(ModelError, match="尝试修复 2 次后仍未通过"):
+        issue.repair("draft", failures, remaining=True)
 
 
-def test_run_workspace_source_and_sandbox_follow_build_lifecycle(client,monkeypatch):
+def test_run_workspace_source_and_sandbox_follow_build_lifecycle(client, monkeypatch):
     from fastapi.testclient import TestClient
 
-    project=create_project(client)
-    rid=submit(client,project["id"]).json()["id"]
-    run=claim("test-leader")
-    path="/api/v1/runs/"+rid
-    assert client.get(path+"/source").status_code==404
-    assert client.post(path+"/preview-ticket",json={}).status_code==404
-    original=httpx.AsyncClient
+    project = create_project(client)
+    rid = submit(client, project["id"]).json()["id"]
+    run = claim("test-leader")
+    path = "/api/v1/runs/" + rid
+    assert client.get(path + "/source").status_code == 404
+    assert client.post(path + "/preview-ticket", json={}).status_code == 404
+    original = httpx.AsyncClient
 
     def handle(request):
-        assert request.url.path=="/internal/validate"
-        assert client.get(path+"/source").json()["files"]==ARTIFACT["files"]
-        assert client.get(path).json()["workspace"]=={"source_revision":1,"has_preview":False,"preview_digest":None}
-        assert client.post(path+"/preview-ticket",json={}).status_code==404
-        return httpx.Response(200,json=VALIDATION)
+        assert request.url.path == "/internal/validate"
+        assert client.get(path + "/source").json()["files"] == ARTIFACT["files"]
+        assert client.get(path).json()["workspace"] == {
+            "source_revision": 1,
+            "has_preview": False,
+            "preview_digest": None,
+        }
+        assert client.post(path + "/preview-ticket", json={}).status_code == 404
+        return httpx.Response(200, json=VALIDATION)
 
-    monkeypatch.setattr(httpx,"AsyncClient",lambda **kwargs:original(transport=httpx.MockTransport(handle)))
-    artifact,validation=asyncio.run(worker.validate_candidate(run,compact(ARTIFACT),1))
-    assert client.get(path).json()["workspace"]=={"source_revision":1,"has_preview":True,"preview_digest":VALIDATION["compiled"]["digest"]}
-    ticket=client.post(path+"/preview-ticket",json={}).json()
-    assert client.get(ticket["url"]).status_code==403
-    iframe={"Sec-Fetch-Dest":"iframe","Sec-Fetch-Site":"same-origin"}
-    preview=client.get(ticket["url"],headers=iframe)
-    assert preview.status_code==200
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: original(transport=httpx.MockTransport(handle)))
+    artifact, validation = asyncio.run(worker.validate_candidate(run, compact(ARTIFACT), 1))
+    assert client.get(path).json()["workspace"] == {
+        "source_revision": 1,
+        "has_preview": True,
+        "preview_digest": VALIDATION["compiled"]["digest"],
+    }
+    ticket = client.post(path + "/preview-ticket", json={}).json()
+    assert client.get(ticket["url"]).status_code == 403
+    iframe = {"Sec-Fetch-Dest": "iframe", "Sec-Fetch-Site": "same-origin"}
+    preview = client.get(ticket["url"], headers=iframe)
+    assert preview.status_code == 200
     assert "sandbox allow-scripts" in preview.headers["Content-Security-Policy"]
-    with TestClient(client.app,base_url="http://localhost:8080") as other:
-        auth=other.post("/api/v1/session",json={},headers={"Origin":"http://localhost:8080","X-App-Request":"atoms"}).json()
-        assert other.get(path+"/source").status_code==404
-        assert other.post(path+"/preview-ticket",json={},headers={
-            "Origin":"http://localhost:8080","X-App-Request":"atoms","X-CSRF-Token":auth["csrf_token"],
-        }).status_code==404
-    worker.commit(run,artifact,validation)
+    with TestClient(client.app, base_url="http://localhost:8080") as other:
+        auth = other.post(
+            "/api/v1/session", json={}, headers={"Origin": "http://localhost:8080", "X-App-Request": "atoms"}
+        ).json()
+        assert other.get(path + "/source").status_code == 404
+        assert (
+            other.post(
+                path + "/preview-ticket",
+                json={},
+                headers={
+                    "Origin": "http://localhost:8080",
+                    "X-App-Request": "atoms",
+                    "X-CSRF-Token": auth["csrf_token"],
+                },
+            ).status_code
+            == 404
+        )
+    worker.commit(run, artifact, validation)
     assert client.get(path).json()["workspace"] is None
-    assert client.get(path+"/source").json()["files"]==ARTIFACT["files"]
-    assert client.get(ticket["url"],headers=iframe).status_code==200
+    assert client.get(path + "/source").json()["files"] == ARTIFACT["files"]
+    assert client.get(ticket["url"], headers=iframe).status_code == 200
 
 
-def test_retained_candidate_can_deliver_without_model_or_credits(client,monkeypatch):
-    p=create_project(client)
-    source=failed_candidate(client,p,compact(ARTIFACT))
+def test_retained_candidate_can_deliver_without_model_or_credits(client, monkeypatch):
+    p = create_project(client)
+    source = failed_candidate(client, p, compact(ARTIFACT))
     with transaction(True) as conn:
-        execute(conn,"UPDATE credit_wallets SET balance_units=0")
-    result=retry(client,p,source)
-    assert result.status_code==202,result.text
-    run=claim("test-leader")
-    async def no_model(*args,**kwargs):
+        execute(conn, "UPDATE credit_wallets SET balance_units=0")
+    result = retry(client, p, source)
+    assert result.status_code == 202, result.text
+    run = claim("test-leader")
+
+    async def no_model(*args, **kwargs):
         pytest.fail("Retained valid candidate must not invoke or charge the model")
-    monkeypatch.setattr(worker,"paid_generate",no_model)
-    validator(monkeypatch,[VALIDATION])
+
+    monkeypatch.setattr(worker, "paid_generate", no_model)
+    validator(monkeypatch, [VALIDATION])
     asyncio.run(execute_run(run))
-    result=client.get("/api/v1/runs/"+run["id"]).json()
-    assert result["status"]=="succeeded" and result["model_calls"]==0
+    result = client.get("/api/v1/runs/" + run["id"]).json()
+    assert result["status"] == "succeeded" and result["model_calls"] == 0
     with transaction() as conn:
-        assert one(conn,"SELECT balance_units FROM credit_wallets")["balance_units"]==0
-        assert not one(conn,"SELECT run_id FROM run_candidates WHERE run_id=:id",id=run["id"])
-        assert one(conn,"SELECT run_id FROM run_candidates WHERE run_id=:id",id=source["id"])
+        assert one(conn, "SELECT balance_units FROM credit_wallets")["balance_units"] == 0
+        assert not one(conn, "SELECT run_id FROM run_candidates WHERE run_id=:id", id=run["id"])
+        assert one(conn, "SELECT run_id FROM run_candidates WHERE run_id=:id", id=source["id"])
 
 
-def test_failed_work_is_saved_and_next_repair_uses_it(client,monkeypatch):
-    monkeypatch.setattr(worker,"MAX_REPAIR_ROUNDS",1)
-    p=create_project(client);assert submit(client,p["id"]).status_code==202
-    run=claim("test-leader")
-    react_artifact={**ARTIFACT,"schema_version":"2","files":{
-        "src/App.tsx":"export default function App(){return <main>测试</main>}",
-        "src/styles.css":"body{margin:0}",
-        "src/components/Label.tsx":"export function Label(){return <span>测试</span>}",
-    }}
-    outputs=iter(['{"bad":"first"}','{"bad":"last"}',compact(react_artifact)])
-    prompts=[]
-    async def generated(prepared,output_limit,**kwargs):
+def test_failed_work_is_saved_and_next_repair_uses_it(client, monkeypatch):
+    monkeypatch.setattr(worker, "MAX_REPAIR_ROUNDS", 1)
+    p = create_project(client)
+    assert submit(client, p["id"]).status_code == 202
+    run = claim("test-leader")
+    react_artifact = {
+        **ARTIFACT,
+        "schema_version": "2",
+        "files": {
+            "src/App.tsx": "export default function App(){return <main>测试</main>}",
+            "src/styles.css": "body{margin:0}",
+            "src/components/Label.tsx": "export function Label(){return <span>测试</span>}",
+        },
+    }
+    outputs = iter(['{"bad":"first"}', '{"bad":"last"}', compact(react_artifact)])
+    prompts = []
+
+    async def generated(prepared, output_limit, **kwargs):
         prompts.append(prepared.messages)
-        return ModelResult(next(outputs),Usage(1200,400,"test-call-"+str(len(prompts))))
-    monkeypatch.setattr(worker,"generate",generated)
-    validator(monkeypatch,[{"ok":False,"error":"first invalid"},{"ok":False,"error":"last invalid"},
-                           {"ok":False,"error":"still invalid"},VALIDATION])
+        return ModelResult(next(outputs), Usage(1200, 400, "test-call-" + str(len(prompts))))
+
+    monkeypatch.setattr(worker, "generate", generated)
+    validator(
+        monkeypatch,
+        [
+            {"ok": False, "error": "first invalid"},
+            {"ok": False, "error": "last invalid"},
+            {"ok": False, "error": "still invalid"},
+            VALIDATION,
+        ],
+    )
     with pytest.raises(ModelError) as caught:
         asyncio.run(execute_run(run))
-    fail(run,caught.value.code,str(caught.value))
+    fail(run, caught.value.code, str(caught.value))
     with transaction() as conn:
-        saved=one(conn,"SELECT * FROM run_candidates WHERE run_id=:id",id=run["id"])
-        assert saved["raw_content"]=='{"bad":"last"}' and saved["diagnostics"]=="last invalid"
-        assert one(conn,"SELECT model_calls FROM runs WHERE id=:id",id=run["id"])["model_calls"]==2
-    message=client.get("/api/v1/projects/"+p["id"]+"/messages").json()["items"][-1]
-    assert message["has_candidate"] and message["run_prompt"]==run["prompt"]
-    result=retry(client,p,run);assert result.status_code==202
-    continued=claim("test-leader")
+        saved = one(conn, "SELECT * FROM run_candidates WHERE run_id=:id", id=run["id"])
+        assert saved["raw_content"] == '{"bad":"last"}' and saved["diagnostics"] == "last invalid"
+        assert one(conn, "SELECT model_calls FROM runs WHERE id=:id", id=run["id"])["model_calls"] == 2
+    message = client.get("/api/v1/projects/" + p["id"] + "/messages").json()["items"][-1]
+    assert message["has_candidate"] and message["run_prompt"] == run["prompt"]
+    result = retry(client, p, run)
+    assert result.status_code == 202
+    continued = claim("test-leader")
     asyncio.run(execute_run(continued))
-    assert client.get("/api/v1/runs/"+continued["id"]).json()["model_calls"]==1
-    feedback=json.loads(prompts[-1][-1]["content"].split("\n",1)[1])
-    assert feedback["candidate"]=='{"bad":"last"}' and feedback["diagnostics"]=="still invalid"
+    assert client.get("/api/v1/runs/" + continued["id"]).json()["model_calls"] == 1
+    feedback = json.loads(prompts[-1][-1]["content"].split("\n", 1)[1])
+    assert feedback["candidate"] == '{"bad":"last"}' and feedback["diagnostics"] == "still invalid"
     with transaction() as conn:
-        assert one(conn,"SELECT COUNT(*) n FROM model_calls WHERE run_id=:id",id=continued["id"])["n"]==1
-        assert one(conn,"SELECT current_version_id FROM projects WHERE id=:id",id=p["id"])["current_version_id"]
+        assert one(conn, "SELECT COUNT(*) n FROM model_calls WHERE run_id=:id", id=continued["id"])["n"] == 1
+        assert one(conn, "SELECT current_version_id FROM projects WHERE id=:id", id=p["id"])["current_version_id"]
 
 
-def test_legacy_failure_has_action_and_diagnostic_context(client,monkeypatch):
-    p=create_project(client);source=failed_candidate(client,p)
-    message=client.get("/api/v1/projects/"+p["id"]+"/messages").json()["items"][-1]
+def test_legacy_failure_has_action_and_diagnostic_context(client, monkeypatch):
+    p = create_project(client)
+    source = failed_candidate(client, p)
+    message = client.get("/api/v1/projects/" + p["id"] + "/messages").json()["items"][-1]
     assert not message["has_candidate"]
-    assert retry(client,p,source).status_code==202
-    run=claim("test-leader")
-    context=worker.read_context(run)
+    assert retry(client, p, source).status_code == 202
+    run = claim("test-leader")
+    context = worker.read_context(run)
     assert context["_resume"]["candidate"] is None
     assert "list" in context["_resume"]["diagnostics"]
 
 
 def test_retry_is_scoped_to_project_prompt_and_current_version(client):
-    p=create_project(client);source=failed_candidate(client,p,compact(ARTIFACT))
-    assert retry(client,p,source,prompt="不同需求").status_code==409
-    other=client.post("/api/v1/projects",json={"client_key":"different-project-key","title":"另一个项目"}).json()
-    assert retry(client,other,source).status_code==404
-    current,successful=complete(client,p,request_key="fresh-request-key")
-    assert retry(client,current,source).json()["detail"]["code"]=="retry_base_changed"
-    assert retry(client,current,successful).json()["detail"]["code"]=="run_not_retryable"
+    p = create_project(client)
+    source = failed_candidate(client, p, compact(ARTIFACT))
+    assert retry(client, p, source, prompt="不同需求").status_code == 409
+    other = client.post("/api/v1/projects", json={"client_key": "different-project-key", "title": "另一个项目"}).json()
+    assert retry(client, other, source).status_code == 404
+    current, successful = complete(client, p, request_key="fresh-request-key")
+    assert retry(client, current, source).json()["detail"]["code"] == "retry_base_changed"
+    assert retry(client, current, successful).json()["detail"]["code"] == "run_not_retryable"
     with pytest.raises(LeaseLost):
-        keep_candidate(source,"late overwrite","stale",2)
+        keep_candidate(source, "late overwrite", "stale", 2)
 
 
-def test_validator_outage_keeps_candidate_for_later(client,monkeypatch):
-    p=create_project(client);assert submit(client,p["id"]).status_code==202
-    run=claim("test-leader")
-    original=httpx.AsyncClient
+def test_validator_outage_keeps_candidate_for_later(client, monkeypatch):
+    p = create_project(client)
+    assert submit(client, p["id"]).status_code == 202
+    run = claim("test-leader")
+    original = httpx.AsyncClient
+
     def unavailable(request):
         return httpx.Response(503)
-    monkeypatch.setattr(httpx,"AsyncClient",lambda **kwargs:original(transport=httpx.MockTransport(unavailable)))
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: original(transport=httpx.MockTransport(unavailable)))
     with pytest.raises(ModelError) as caught:
-        asyncio.run(worker.validate_candidate(run,compact(ARTIFACT),1))
-    assert caught.value.code=="VALIDATOR_UNAVAILABLE"
+        asyncio.run(worker.validate_candidate(run, compact(ARTIFACT), 1))
+    assert caught.value.code == "VALIDATOR_UNAVAILABLE"
     with transaction() as conn:
-        assert one(conn,"SELECT raw_content FROM run_candidates WHERE run_id=:id",id=run["id"])["raw_content"]==compact(ARTIFACT)
+        assert one(conn, "SELECT raw_content FROM run_candidates WHERE run_id=:id", id=run["id"])[
+            "raw_content"
+        ] == compact(ARTIFACT)
 
 
-@pytest.mark.parametrize("temporary_response", [
-    httpx.Response(429),
-    httpx.Response(503,json={"ok":False,"error":"浏览器检查超时"}),
-    httpx.Response(200,json={"ok":False,"error":"浏览器效果验收超时"}),
-])
-def test_temporary_validator_failure_rechecks_the_same_candidate(client,monkeypatch,temporary_response):
-    project=create_project(client)
-    assert submit(client,project["id"]).status_code==202
-    run=claim("test-leader")
-    original=httpx.AsyncClient
-    received=[]
+@pytest.mark.parametrize(
+    "temporary_response",
+    [
+        httpx.Response(429),
+        httpx.Response(503, json={"ok": False, "error": "浏览器检查超时"}),
+        httpx.Response(200, json={"ok": False, "error": "浏览器效果验收超时"}),
+    ],
+)
+def test_temporary_validator_failure_rechecks_the_same_candidate(client, monkeypatch, temporary_response):
+    project = create_project(client)
+    assert submit(client, project["id"]).status_code == 202
+    run = claim("test-leader")
+    original = httpx.AsyncClient
+    received = []
 
     def validate(request):
         received.append(json.loads(request.content)["artifact"])
-        if len(received)==1:
+        if len(received) == 1:
             return temporary_response
-        return httpx.Response(200,json=VALIDATION)
+        return httpx.Response(200, json=VALIDATION)
 
-    monkeypatch.setattr(httpx,"AsyncClient",lambda **kwargs:original(transport=httpx.MockTransport(validate)))
-    monkeypatch.setattr(worker,"VALIDATOR_RETRY_DELAYS",(0,))
-    asyncio.run(worker.validate_with_retry(run,compact(ARTIFACT),1))
-    assert received==[ARTIFACT,ARTIFACT]
-    assert client.get("/api/v1/runs/"+run["id"]).json()["model_calls"]==0
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: original(transport=httpx.MockTransport(validate)))
+    monkeypatch.setattr(worker, "VALIDATOR_RETRY_DELAYS", (0,))
+    asyncio.run(worker.validate_with_retry(run, compact(ARTIFACT), 1))
+    assert received == [ARTIFACT, ARTIFACT]
+    assert client.get("/api/v1/runs/" + run["id"]).json()["model_calls"] == 0
 
 
-@pytest.mark.parametrize("code,uncertain,retryable",[
-    ("PROVIDER_RATE_LIMIT",False,True),
-    ("MODEL_CONNECTION",False,True),
-    ("MODEL_NETWORK",True,False),
-    ("MODEL_AUTH",False,False),
-])
-def test_model_service_only_retries_safe_failures(client,monkeypatch,code,uncertain,retryable):
-    project=create_project(client)
-    assert submit(client,project["id"]).status_code==202
-    run=claim("test-leader")
-    calls=[]
-    artifact={**ARTIFACT,"schema_version":"2","files":{
-        "src/App.tsx":"export default function App(){return <main>测试</main>}",
-        "src/styles.css":"body{margin:0}","src/helper.ts":"export {}",
-    }}
+@pytest.mark.parametrize(
+    "code,uncertain,retryable",
+    [
+        ("PROVIDER_RATE_LIMIT", False, True),
+        ("MODEL_CONNECTION", False, True),
+        ("MODEL_NETWORK", True, False),
+        ("MODEL_AUTH", False, False),
+    ],
+)
+def test_model_service_only_retries_safe_failures(client, monkeypatch, code, uncertain, retryable):
+    project = create_project(client)
+    assert submit(client, project["id"]).status_code == 202
+    run = claim("test-leader")
+    calls = []
+    artifact = {
+        **ARTIFACT,
+        "schema_version": "2",
+        "files": {
+            "src/App.tsx": "export default function App(){return <main>测试</main>}",
+            "src/styles.css": "body{margin:0}",
+            "src/helper.ts": "export {}",
+        },
+    }
 
-    async def generate(run,context,repair,*,skill):
+    async def generate(run, context, repair, *, skill):
         calls.append(repair)
-        if len(calls)==1:
-            raise ModelError(code,"模型服务测试",uncertain=uncertain)
+        if len(calls) == 1:
+            raise ModelError(code, "模型服务测试", uncertain=uncertain)
         return compact(artifact)
 
-    monkeypatch.setattr(worker,"paid_generate",generate)
-    monkeypatch.setattr(worker,"MODEL_RETRY_DELAYS",(0,))
-    validator(monkeypatch,[VALIDATION])
+    monkeypatch.setattr(worker, "paid_generate", generate)
+    monkeypatch.setattr(worker, "MODEL_RETRY_DELAYS", (0,))
+    validator(monkeypatch, [VALIDATION])
     if retryable:
         asyncio.run(execute_run(run))
-        assert calls==[None,None]
-        assert client.get("/api/v1/runs/"+run["id"]).json()["status"]=="succeeded"
-        assert "event: model_wait" in client.get("/api/v1/runs/"+run["id"]+"/events").text
+        assert calls == [None, None]
+        assert client.get("/api/v1/runs/" + run["id"]).json()["status"] == "succeeded"
+        assert "event: model_wait" in client.get("/api/v1/runs/" + run["id"] + "/events").text
     else:
         with pytest.raises(ModelError) as caught:
             asyncio.run(execute_run(run))
-        assert calls==[None]
-        assert caught.value.code==code
+        assert calls == [None]
+        assert caught.value.code == code
 
 
-def test_legacy_acceptance_failure_rechecks_saved_draft_without_another_model_call(client,monkeypatch):
-    from atoms.model_fixture import game_artifact
-    from atoms.orchestration import PLAN_FILE,TaskPlan
+def test_legacy_acceptance_failure_rechecks_saved_draft_without_another_model_call(client, monkeypatch):
+    from atoms.runtime.model_fixture import game_artifact
+    from atoms.runtime.orchestration import PLAN_FILE, TaskPlan
 
-    project=client.post("/api/v1/projects",json={"client_key":"game-final-recheck","title":"游戏恢复","kind":"game"}).json()
-    artifact=json.loads(game_artifact(broken=True,incomplete_replay=False))
-    plan=TaskPlan(experience="other_game",rendering="dom",
-        requirements=["可进入游戏","能操作"],visual_direction="清晰可辨",
-        specialist_brief="浏览器游戏",game_genre="other").model_dump()
-    artifact["files"][PLAN_FILE]=compact({**plan,"acceptance":["启动","运行"],"browser_acceptance":[
-        {"name":"旧验收使用不存在的控件","steps":[{"action":"click","target":"wrong-target"}]},
-    ]})
-    assert submit(client,project["id"]).status_code==202
-    source=claim("test-leader")
-    keep_candidate(source,compact(artifact),"自动输入结果未确认",4)
-    fail(source,"ACCEPTANCE_UNCONFIRMED","自动输入结果未确认")
+    project = client.post(
+        "/api/v1/projects", json={"client_key": "game-final-recheck", "title": "游戏恢复", "kind": "game"}
+    ).json()
+    artifact = json.loads(game_artifact(broken=True, incomplete_replay=False))
+    plan = TaskPlan(
+        experience="other_game",
+        rendering="dom",
+        requirements=["可进入游戏", "能操作"],
+        visual_direction="清晰可辨",
+        specialist_brief="浏览器游戏",
+        game_genre="other",
+    ).model_dump()
+    artifact["files"][PLAN_FILE] = compact(
+        {
+            **plan,
+            "acceptance": ["启动", "运行"],
+            "browser_acceptance": [
+                {"name": "旧验收使用不存在的控件", "steps": [{"action": "click", "target": "wrong-target"}]},
+            ],
+        }
+    )
+    assert submit(client, project["id"]).status_code == 202
+    source = claim("test-leader")
+    keep_candidate(source, compact(artifact), "自动输入结果未确认", 4)
+    fail(source, "ACCEPTANCE_UNCONFIRMED", "自动输入结果未确认")
     with transaction(True) as conn:
-        execute(conn,"UPDATE credit_wallets SET balance_units=0")
-    assert retry(client,project,source).status_code==202
-    run=claim("test-leader")
+        execute(conn, "UPDATE credit_wallets SET balance_units=0")
+    assert retry(client, project, source).status_code == 202
+    run = claim("test-leader")
 
-    async def no_model(*args,**kwargs):
+    async def no_model(*args, **kwargs):
         pytest.fail("Saved final candidate should be rechecked without another model call")
 
     def validate(request):
-        body=json.loads(request.content)
+        body = json.loads(request.content)
         assert "behavior_check" not in body
         assert "game_smoke" not in body
         assert "browser_acceptance" not in body
-        assert json.loads(body["artifact"]["files"][PLAN_FILE])==plan
-        return httpx.Response(200,json=VALIDATION)
+        assert json.loads(body["artifact"]["files"][PLAN_FILE]) == plan
+        return httpx.Response(200, json=VALIDATION)
 
-    original=httpx.AsyncClient
-    monkeypatch.setattr(httpx,"AsyncClient",lambda **kwargs:original(transport=httpx.MockTransport(validate)))
-    monkeypatch.setattr(worker,"agent_plan",no_model)
-    monkeypatch.setattr(worker,"paid_generate",no_model)
+    original = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: original(transport=httpx.MockTransport(validate)))
+    monkeypatch.setattr(worker, "agent_plan", no_model)
+    monkeypatch.setattr(worker, "paid_generate", no_model)
     asyncio.run(execute_run(run))
-    assert client.get("/api/v1/runs/"+run["id"]).json()["status"]=="succeeded"
-    assert client.get("/api/v1/runs/"+run["id"]).json()["model_calls"]==0
+    assert client.get("/api/v1/runs/" + run["id"]).json()["status"] == "succeeded"
+    assert client.get("/api/v1/runs/" + run["id"]).json()["model_calls"] == 0
 
 
-@pytest.mark.parametrize("checked_base",[False,True])
-def test_slide_edits_use_startup_even_when_base_used_navigation(client,monkeypatch,checked_base):
-    created=client.post("/api/v1/projects",json={"client_key":"slides-test-key","title":"演示","kind":"slides"})
-    assert created.status_code==201
-    project,base_run=complete(client,created.json())
+@pytest.mark.parametrize("checked_base", [False, True])
+def test_slide_edits_use_startup_even_when_base_used_navigation(client, monkeypatch, checked_base):
+    created = client.post("/api/v1/projects", json={"client_key": "slides-test-key", "title": "演示", "kind": "slides"})
+    assert created.status_code == 201
+    project, base_run = complete(client, created.json())
     if checked_base:
-        report={"ready":True,"behavior_check":"slides-navigation-v1"}
+        report = {"ready": True, "behavior_check": "slides-navigation-v1"}
         with transaction(True) as conn:
-            execute(conn,"UPDATE artifacts SET validation_json=:report WHERE id=(SELECT artifact_id FROM versions WHERE source_run_id=:run)",
-                    report=compact(report),run=base_run["id"])
-    accepted=submit(client,project["id"],revision=project["revision"],base=project["current_version_id"],request_key="slide-edit-key")
-    assert accepted.status_code==202
-    run=claim("test-leader")
+            execute(
+                conn,
+                "UPDATE artifacts SET validation_json=:report WHERE id=(SELECT artifact_id FROM versions WHERE source_run_id=:run)",
+                report=compact(report),
+                run=base_run["id"],
+            )
+    accepted = submit(
+        client,
+        project["id"],
+        revision=project["revision"],
+        base=project["current_version_id"],
+        request_key="slide-edit-key",
+    )
+    assert accepted.status_code == 202
+    run = claim("test-leader")
 
-    async def generate_edit(run,context,repair,*,skill):
-        assert skill.kind=="slides"
+    async def generate_edit(run, context, repair, *, skill):
+        assert skill.kind == "slides"
         assert "_base_behavior_check" not in context
         return compact(ARTIFACT)
 
-    monkeypatch.setattr(worker,"paid_generate",generate_edit)
-    validator(monkeypatch,[VALIDATION])
+    monkeypatch.setattr(worker, "paid_generate", generate_edit)
+    validator(monkeypatch, [VALIDATION])
     asyncio.run(execute_run(run))
     with transaction() as conn:
-        artifact=one(conn,"SELECT a.validation_json FROM artifacts a JOIN versions v ON v.artifact_id=a.id WHERE v.source_run_id=:run",run=run["id"])
-    saved=json.loads(artifact["validation_json"])
+        artifact = one(
+            conn,
+            "SELECT a.validation_json FROM artifacts a JOIN versions v ON v.artifact_id=a.id WHERE v.source_run_id=:run",
+            run=run["id"],
+        )
+    saved = json.loads(artifact["validation_json"])
     assert "behavior_check" not in saved
-    assert saved["acceptance"]=="startup"
-    assert saved["generation_skill"]["kind"]=="slides"
+    assert saved["acceptance"] == "startup"
+    assert saved["generation_skill"]["kind"] == "slides"

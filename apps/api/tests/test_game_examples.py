@@ -1,7 +1,7 @@
 import pytest
 
-from atoms.db import one, transaction
-from atoms.examples import EXAMPLES
+from atoms.core.db import one, transaction
+from atoms.domains.examples import EXAMPLES
 
 
 @pytest.mark.parametrize("example_id", sorted(EXAMPLES))

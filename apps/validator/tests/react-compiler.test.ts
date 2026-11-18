@@ -32,6 +32,18 @@ describe("React project compiler",()=>{
     expect(script).toContain("PerspectiveCamera");
     expect(script).not.toContain("process.emitWarning");
   });
+  it("bundles the pre-installed lucide-react vector icon package without network fetches",async()=>{
+    const value=artifact();
+    value.files["src/App.tsx"]=`import {"Sparkles" as Icon, Check} from "lucide-react";
+      // import {Box} from "three"
+      const msg = 'Welcome from "three"';
+      export default function App(){return <main><p>Don't miss</p><Icon size={18}/><Check size={16}/></main>}`;
+    const result=await compileReact(value);
+    expect(result.compiler_version).toBe("2");
+    expect(result.dependencies).toEqual(["lucide-react","react","react-dom"]);
+    const script=Buffer.from(result.js_base64,"base64").toString("utf8");
+    expect(script).toContain("svg");
+  });
   it("accepts importing the already loaded global stylesheet",async()=>{
     const value=artifact();
     value.files["src/App.tsx"]='import "./styles.css"; '+value.files["src/App.tsx"];

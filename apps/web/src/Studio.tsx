@@ -6,7 +6,8 @@ import {api,date,type Capabilities,type Project,type ProjectKind} from "./api";
 import {creationKinds,inferProjectKind,modes} from "./creationModes";
 import Breakout from "./Breakout";
 import Modal from "./Modal";
-import ExamplePreview from "./ExamplePreview";
+import {ExampleShowcase} from "./ExamplePreview";
+import {openWalletDialog} from "./Wallet";
 import StudioGallery,{SlideExampleGallery} from "./StudioGallery";
 import type {StudioExample} from "./studioExamples";
 import {SlideTemplateGallery} from "./SlideTemplateGallery";
@@ -195,6 +196,10 @@ export function StudioLanding({kind}:{kind:ProjectKind}) {
         {home && <div className="studio-filters website-idea-shortcuts" aria-label="网站创作示例">
           {websiteIdeas.map(idea => <button key={idea.label} type="button" onClick={()=>useExample(idea.prompt)}>{idea.label}</button>)}
         </div>}
+        {cap?.guardrails?.daily_budget_reached && <div className="capability-warning" role="status">
+          <span>今日全站公共体验额度已达上限（预计 {cap.guardrails.reset_label} 重置）；仍可浏览体验下方作品，或使用口令继续生成。</span>
+          <button type="button" className="plain-button" onClick={openWalletDialog}>输入体验码</button>
+        </div>}
         {error && <div className="inline-error" role="alert">{error}</div>}
       </div>
     </section>
@@ -208,14 +213,7 @@ export function StudioLanding({kind}:{kind:ProjectKind}) {
         </div>
       </section>}
     {example && <Modal wide title={example.title} onClose={()=>setExample(undefined)}>
-      <div className="example-modal-content">
-        <div className="example-interactive"><ExamplePreview example={example}/></div>
-        <div className="example-modal-aside">
-          <span className="studio-output">{modes[example.kind].output}</span>
-          <p>{example.description}</p>
-          <button type="button" className="studio-submit" disabled={busy} onClick={()=>useExample(example.prompt)}>使用此示例的提示词 <ArrowRight size={15}/></button>
-        </div>
-      </div>
+      <ExampleShowcase example={example} busy={busy} onUsePrompt={useExample}/>
     </Modal>}
     {pendingExample && <Modal title="替换已有草稿？" onClose={()=>setPendingExample(undefined)}>
       <p className="muted">输入框已有一份未提交的需求。你可以保留草稿，或换成这条示例需求。</p>

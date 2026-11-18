@@ -1,5 +1,6 @@
 import {useEffect,useState} from "react";
 import {Check,ChevronDown,LoaderCircle} from "lucide-react";
+import InspectorDrawer from "./InspectorPanel";
 
 const stages:Record<string,string>={
   accepted:"等待生成服务", pending:"等待生成服务", read_context:"读取需求与项目上下文", researching:"查找同类游戏和玩法资料",
@@ -52,7 +53,7 @@ export function useRunProgress(runId:string|undefined, onUpdate:(kind:string)=>v
   return record?.runId===runId?record:undefined;
 }
 
-export default function RunProgress({events,stage,eventSeq,connection,busy,onCode,onPreview}:{events:ProgressEvent[];stage?:string;eventSeq?:number;connection?:Connection;busy:boolean;onCode?:()=>void;onPreview?:()=>void}){
+export default function RunProgress({runId,events,stage,eventSeq,connection,busy,onCode,onPreview}:{runId?:string;events:ProgressEvent[];stage?:string;eventSeq?:number;connection?:Connection;busy:boolean;onCode?:()=>void;onPreview?:()=>void}){
   const latest=events.at(-1);
   const snapshotAhead=!!stage&&(eventSeq!==undefined?eventSeq>(latest?.id??0):connection==="reconnecting");
   const current=snapshotAhead?stage:latest?.kind??stage;
@@ -84,5 +85,6 @@ export default function RunProgress({events,stage,eventSeq,connection,busy,onCod
           </div></li>;
       })}</ol>
     </details>}
+    {runId&&<InspectorDrawer runId={runId} active={busy} variant="inline"/>}
   </section>;
 }

@@ -8,7 +8,7 @@ import { Ajv2020 } from "ajv/dist/2020.js";
 import { ValidationDiagnostic } from "./diagnostic.js";
 
 export type Artifact = {schema_version: "1"; title: string; summary: string; files: {"index.html": string; "styles.css": string; "app.js": string}};
-export type Compiled = {body_html: string; css_base64: string; js_base64: string; digest: string; compiler_version: string; sdk_version: string};
+export type Compiled = {body_html: string; css_base64: string; js_base64: string; digest: string; compiler_version: string; sdk_version: string; dependencies?: string[]};
 const root = new URL("../../../shared/preview-runtime/", import.meta.url);
 export const runtime = readFileSync(new URL("runtime.js", root), "utf8");
 const template = readFileSync(new URL("document.html", root), "utf8");

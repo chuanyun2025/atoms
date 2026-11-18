@@ -1,4 +1,5 @@
 """Generation skills shipped with the application and selected by project kind."""
+
 from dataclasses import dataclass
 from functools import cache
 from hashlib import sha256
@@ -19,9 +20,9 @@ class GenerationSkill:
 
 
 _MECHANICS_REFERENCES = {
-    "tile_merge":"tile-merge",
-    "platformer":"platformer",
-    "arcade_platformer":"platformer",
+    "tile_merge": "tile-merge",
+    "platformer": "platformer",
+    "arcade_platformer": "platformer",
 }
 
 
@@ -34,8 +35,11 @@ def game_mechanics_skill(genre: str | None = None) -> str:
 
 
 def skill_for(kind: str | None, *, threejs: bool = False, game_genre: str | None = None) -> GenerationSkill:
-    return _load_skill(kind if kind in _KINDS else "web", threejs=kind == "game" and threejs,
-                       genre=game_genre if kind == "game" else None)
+    return _load_skill(
+        kind if kind in _KINDS else "web",
+        threejs=kind == "game" and threejs,
+        genre=game_genre if kind == "game" else None,
+    )
 
 
 @cache

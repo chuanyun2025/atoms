@@ -4,6 +4,7 @@ import {posix} from "node:path";
 import {fileURLToPath} from "node:url";
 import {Ajv2020} from "ajv/dist/2020.js";
 import {build,type BuildFailure,type Loader,type Plugin} from "esbuild";
+import ts from "typescript";
 import {compile,type Compiled} from "./compiler.js";
 import {ValidationDiagnostic} from "./diagnostic.js";
 import {checkSandboxContract} from "./sandbox-contract.js";
@@ -44,7 +45,7 @@ function sourceModules(files:Record<string,string>):Plugin {
           );
           if (found) return {path:found,namespace:"atoms-source"};
         }
-        return {errors:[{text:"无法导入 "+JSON.stringify(args.path)+"。可用 React、Three.js 与项目 src 内的 TSX、TS、JSON 文件",
+        return {errors:[{text:"无法导入 "+JSON.stringify(args.path)+"。可用 React、lucide-react、Three.js 与项目 src 内的 TSX、TS、JSON 文件",
           detail:{code:"COMPILE_IMPORT",subject:args.path}}]};
       });
       bundle.onLoad({filter:/.*/,namespace:"atoms-styles"}, () => ({contents:"",loader:"js"}));
@@ -54,6 +55,31 @@ function sourceModules(files:Record<string,string>):Plugin {
       }));
     },
   };
+}
+
+function collectRuntimeDependencies(files:Record<string,string>):string[] {
+  const used=new Set<string>(["react","react-dom"]);
+  for (const [path,code] of Object.entries(files)) {
+    if (!/\.(?:ts|tsx)$/.test(path) || typeof code !== "string") continue;
+    const sf=ts.createSourceFile(
+      path,
+      code,
+      ts.ScriptTarget.ES2022,
+      false,
+      path.endsWith(".tsx")?ts.ScriptKind.TSX:ts.ScriptKind.TS,
+    );
+    for (const stmt of sf.statements) {
+      if (
+        (ts.isImportDeclaration(stmt) || ts.isExportDeclaration(stmt)) &&
+        stmt.moduleSpecifier &&
+        ts.isStringLiteral(stmt.moduleSpecifier) &&
+        Object.hasOwn(runtimeDependencies,stmt.moduleSpecifier.text)
+      ) {
+        used.add(stmt.moduleSpecifier.text);
+      }
+    }
+  }
+  return Object.keys(runtimeDependencies).filter(name => used.has(name));
 }
 
 export async function compileReact(input:unknown):Promise<Compiled> {
@@ -116,5 +142,6 @@ export async function compileReact(input:unknown):Promise<Compiled> {
     ...compiled,
     digest:createHash("sha256").update(JSON.stringify({artifact:input,bundle:compiled.digest,compiler_version:"2"})).digest("hex"),
     compiler_version:"2",
+    dependencies:collectRuntimeDependencies(input.files),
   };
 }

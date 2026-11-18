@@ -1,6 +1,6 @@
 import {useEffect,useRef,useState} from "react";
 import {AlertCircle,LoaderCircle} from "lucide-react";
-import {api} from "./api";
+import {api,publicGet} from "./api";
 type Ticket={url:string;instance_id:string;channel_nonce:string;read_only:boolean};
 type State={revision:number;values:Record<string,unknown>};
 type Message={protocol_version:number;instance_id:string;message_id:string;type:string;payload:Record<string,unknown>};
@@ -31,7 +31,7 @@ export default function Preview({pid,vid,exampleId,runId,publication,reload,phon
       ? Promise.resolve(exampleStates.get(exampleId)??{revision:0,values:{}})
       : api<State>("/projects/"+pid+"/app-state");
     const previewTicket=publication?Promise.resolve(publication.ticket):exampleId
-      ? api<Ticket>("/examples/"+exampleId+"/preview-ticket")
+      ? publicGet<Ticket>("/examples/"+exampleId+"/preview-ticket")
       : api<Ticket>(runId?"/runs/"+runId+"/preview-ticket":"/projects/"+pid+"/versions/"+vid+"/preview-ticket","POST",{});
     const load=Promise.all([previewTicket,state]);
     load

@@ -1,36 +1,45 @@
 import asyncio
-import pytest
+
 import httpx
-from atoms.config import settings
-from atoms.artifacts import strict_json
-from atoms.model import generate,ModelError,Prepared
-from atoms.prompts import messages_for
+import pytest
+
+from atoms.core.config import settings
+from atoms.domains.artifacts import strict_json
+from atoms.runtime.model import ModelError, Prepared, generate
+from atoms.runtime.prompts import messages_for
 from atoms.skills import skill_for
 
 
 def test_strict_duplicate_and_fences():
-    assert strict_json('{"a":1}')=={"a":1}
-    with pytest.raises(ValueError):strict_json('{"a":1,"a":2}')
-    with pytest.raises(ValueError):strict_json('{"a":NaN}')
+    assert strict_json('{"a":1}') == {"a": 1}
+    with pytest.raises(ValueError):
+        strict_json('{"a":1,"a":2}')
+    with pytest.raises(ValueError):
+        strict_json('{"a":NaN}')
 
 
-@pytest.mark.parametrize("kind,heading",[
-    ("web","# 可交互网站"), ("slides","# 网页幻灯片"),
-    ("game","# 浏览器游戏"), ("video","# 网页分镜样片"),
-])
-def test_project_kind_selects_single_skill(kind,heading):
-    skill=skill_for(kind)
-    messages=messages_for({"request":"只修改背景色"},None,skill=skill)
+@pytest.mark.parametrize(
+    "kind,heading",
+    [
+        ("web", "# 可交互网站"),
+        ("slides", "# 网页幻灯片"),
+        ("game", "# 浏览器游戏"),
+        ("video", "# 网页分镜样片"),
+    ],
+)
+def test_project_kind_selects_single_skill(kind, heading):
+    skill = skill_for(kind)
+    messages = messages_for({"request": "只修改背景色"}, None, skill=skill)
     assert heading in messages[0]["content"]
     assert "只修改背景色" not in messages[0]["content"]
     assert "只修改背景色" in messages[1]["content"]
     assert "data-deck-next" not in messages[0]["content"]
-    assert ("# 2D 游戏制作指导" in messages[0]["content"]) == (kind=="game")
+    assert ("# 2D 游戏制作指导" in messages[0]["content"]) == (kind == "game")
     assert "web-artifacts-builder" not in messages[0]["content"]
     assert "`pptx` Skill" not in messages[0]["content"]
     assert "confirm with the client" not in messages[0]["content"]
-    assert ("# Frontend Design" in messages[0]["content"]) == (kind=="web")
-    assert len(skill.revision)==12
+    assert ("# Frontend Design" in messages[0]["content"]) == (kind == "web")
+    assert len(skill.revision) == 12
     assert skill_for(kind) is skill
 
 
@@ -50,9 +59,9 @@ def test_frontend_design_applies_to_website_repairs_with_platform_contract():
 
 
 def test_threejs_generation_and_repair_include_the_game_guidance():
-    context = {"project_kind":"game", "site_format":"react", "request":"用 Three.js 制作飞行游戏"}
+    context = {"project_kind": "game", "site_format": "react", "request": "用 Three.js 制作飞行游戏"}
     skill = skill_for("game", threejs=True)
-    for repair in (None, {"diagnostics":"重开时场景未清理"}):
+    for repair in (None, {"diagnostics": "重开时场景未清理"}):
         messages = messages_for(context, repair, skill=skill)
         assert "# Three.js 游戏制作指导" in messages[0]["content"]
         assert "CanvasTexture" in messages[0]["content"]
@@ -83,30 +92,33 @@ def test_threejs_is_available_to_website_generation_and_repairs(repair):
 
 
 def test_legacy_slide_revision_keeps_guidance_without_navigation_contract():
-    messages=messages_for({"project_kind":"slides"},{"diagnostics":"原始修复反馈"},
-                          skill=skill_for("slides"))
+    messages = messages_for({"project_kind": "slides"}, {"diagnostics": "原始修复反馈"}, skill=skill_for("slides"))
     assert "# 网页幻灯片" in messages[0]["content"]
     assert "data-deck-next" not in messages[0]["content"]
     assert "原始修复反馈" in messages[2]["content"]
-    assert skill_for("unrecognized").kind=="web"
+    assert skill_for("unrecognized").kind == "web"
 
 
 def test_provider_protocol_and_sanitized_errors(monkeypatch):
-    config=settings()
-    monkeypatch.setattr(config,"test_fixture",False)
-    monkeypatch.setattr(config,"provider_gateway_token","internal-test-token")
-    original=httpx.AsyncClient
+    config = settings()
+    monkeypatch.setattr(config, "test_fixture", False)
+    monkeypatch.setattr(config, "provider_gateway_token", "internal-test-token")
+    original = httpx.AsyncClient
+
     def handler(request):
-        assert str(request.url)=="http://provider-gateway:8100/internal/v1/text/generate"
-        assert request.headers["authorization"]=="Bearer internal-test-token"
-        body=__import__("json").loads(request.content)
-        assert "model" not in body and body["max_output_tokens"]==393216
-        assert body["response_schema"]["name"]=="artifact"
-        return httpx.Response(401,json={"error":{"code":"MODEL_AUTH","message":"模型服务认证失败"}})
-    monkeypatch.setattr(httpx,"AsyncClient",lambda **kwargs:original(**{**kwargs, 'transport':httpx.MockTransport(handler)}))
+        assert str(request.url) == "http://provider-gateway:8100/internal/v1/text/generate"
+        assert request.headers["authorization"] == "Bearer internal-test-token"
+        body = __import__("json").loads(request.content)
+        assert "model" not in body and body["max_output_tokens"] == 393216
+        assert body["response_schema"]["name"] == "artifact"
+        return httpx.Response(401, json={"error": {"code": "MODEL_AUTH", "message": "模型服务认证失败"}})
+
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kwargs: original(**{**kwargs, "transport": httpx.MockTransport(handler)})
+    )
     with pytest.raises(ModelError) as caught:
-        asyncio.run(generate(Prepared([{"role":"user","content":"测试"}],2000,393216),393216))
-    assert caught.value.code=="MODEL_AUTH" and "secret" not in str(caught.value)
+        asyncio.run(generate(Prepared([{"role": "user", "content": "测试"}], 2000, 393216), 393216))
+    assert caught.value.code == "MODEL_AUTH" and "secret" not in str(caught.value)
 
 
 def test_repair_context_omits_duplicate_reference_files_when_candidate_is_valid():
@@ -118,13 +130,17 @@ def test_repair_context_omits_duplicate_reference_files_when_candidate_is_valid(
         "base_artifact": {"title": "旧版", "files": {"src/App.tsx": "base-source"}},
     }
     valid_candidate = '{"schema_version":"2","title":"t","summary":"s","files":{"src/App.tsx":"candidate-source"}}'
-    messages = messages_for(context, {"candidate": valid_candidate, "diagnostic": {"code": "COMPILE_ERROR"}}, skill=skill_for("web"))
+    messages = messages_for(
+        context, {"candidate": valid_candidate, "diagnostic": {"code": "COMPILE_ERROR"}}, skill=skill_for("web")
+    )
     assert "starter-source" not in messages[1]["content"]
     assert "base-source" not in messages[1]["content"]
     assert "portfolio" in messages[1]["content"]
     assert "candidate-source" in messages[2]["content"]
 
-    truncated = messages_for(context, {"candidate": valid_candidate, "diagnostic": {"code": "MODEL_TRUNCATED"}}, skill=skill_for("web"))
+    truncated = messages_for(
+        context, {"candidate": valid_candidate, "diagnostic": {"code": "MODEL_TRUNCATED"}}, skill=skill_for("web")
+    )
     assert "starter-source" in truncated[1]["content"]
     assert "base-source" in truncated[1]["content"]
 
@@ -134,12 +150,15 @@ def test_repair_payload_structures_valid_json_and_preserves_raw_on_broken_or_tru
 
     context = {"project_kind": "web", "site_format": "react", "request": "做一个待办清单"}
     source = 'export default function App(){return <main className="card">你好</main>}'
-    valid_candidate = json.dumps({
-        "schema_version": "2",
-        "title": "待办",
-        "summary": "清单",
-        "files": {"src/App.tsx": source, "src/styles.css": "body{margin:0}"},
-    }, ensure_ascii=False)
+    valid_candidate = json.dumps(
+        {
+            "schema_version": "2",
+            "title": "待办",
+            "summary": "清单",
+            "files": {"src/App.tsx": source, "src/styles.css": "body{margin:0}"},
+        },
+        ensure_ascii=False,
+    )
 
     structured = messages_for(
         context,
@@ -228,10 +247,15 @@ def test_react_response_schema_allows_two_model_files_before_plan_injection(monk
         captured["schema"] = body["response_schema"]
         return httpx.Response(
             200,
-            json={"content": '{"schema_version":"2","title":"t","summary":"s","files":{"src/App.tsx":"x","src/styles.css":""}}', "usage": {"input_tokens": 10, "output_tokens": 20}},
+            json={
+                "content": '{"schema_version":"2","title":"t","summary":"s","files":{"src/App.tsx":"x","src/styles.css":""}}',
+                "usage": {"input_tokens": 10, "output_tokens": 20},
+            },
         )
 
-    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: original(**{**kwargs, "transport": httpx.MockTransport(handler)}))
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kwargs: original(**{**kwargs, "transport": httpx.MockTransport(handler)})
+    )
     asyncio.run(generate(Prepared([{"role": "user", "content": "测试"}], 2000, 393216, react_site=True), 393216))
     assert captured["schema"]["name"] == "react_artifact"
     assert captured["schema"]["schema"]["properties"]["files"]["minProperties"] == 2

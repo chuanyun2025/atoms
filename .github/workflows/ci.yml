@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Python API & Architecture Gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Install backend dependencies
+        run: uv sync --project apps/api
+      - name: Ruff lint check
+        run: uv run --directory apps/api ruff check atoms tests ../../evals
+      - name: Ruff format check
+        run: uv run --directory apps/api ruff format --check atoms tests ../../evals
+      - name: Run backend & architecture unit tests
+        run: uv run --directory apps/api pytest -q
+
+  web-and-validator:
+    name: Web & Validator Typecheck, Unit Tests & Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+      - name: Install workspace packages
+        run: npm ci
+      - name: TypeScript check across workspaces
+        run: npm run check
+      - name: Run Web DOM & Validator unit tests
+        run: npm run test
+      - name: Build production bundles
+        run: npm run build

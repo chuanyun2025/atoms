@@ -6,7 +6,7 @@ import {api,ApiError,key,type Project,type Version,type Message,type Capabilitie
 import {useCapabilities} from "./Studio";
 import {useProjectCreation} from "./useProjectCreation";
 import Preview from "./Preview";
-import {useWallet} from "./Wallet";
+import {openWalletDialog,useWallet} from "./Wallet";
 import "./video.css";
 
 type VideoInput={image_asset_id:string|null;duration:number;audio:boolean;prompt?:string};
@@ -14,7 +14,13 @@ type VideoDraft={prompt:string;dataUrl:string;imageAssetId?:string;duration:numb
 const mediaUrl=(pid:string,id:string)=>`/api/v1/projects/${pid}/media/${id}`;
 
 function unavailable(cap?:Capabilities) {
-  return !cap?"正在连接创作服务…":cap.read_only?"系统维护中，暂时不能生成视频":!cap.video_configured?"视频服务尚未连接，请联系管理员":!cap.worker_available?"生成服务正在启动，请稍后再试":"";
+  if (!cap) return "正在连接创作服务…";
+  if (cap.read_only) return "系统维护中，暂时不能生成视频";
+  if (!cap.video_configured) return "视频服务尚未连接，请联系管理员";
+  if (!cap.worker_available) return "生成服务正在启动，请稍后再试";
+  if (cap.guardrails && !cap.guardrails.video_unlocked) return "公共环境默认关闭高成本视频生成，请点击输入体验口令解锁";
+  if (cap.guardrails?.daily_budget_reached) return "今日公共体验额度已达上限，请输入体验口令解锁";
+  return "";
 }
 
 function VideoForm({pid,initial,prompt:initialPrompt="",resolution="540p",busy,unavailableReason,onSubmit,error}:{pid?:string;initial?:VideoInput|null;prompt?:string;resolution?:string;busy:boolean;unavailableReason:string;onSubmit:(value:VideoDraft)=>Promise<void>;error?:string}) {
@@ -76,7 +82,7 @@ function VideoForm({pid,initial,prompt:initialPrompt="",resolution="540p",busy,u
     <div className="video-quote"><span>预计使用 <strong>{quote?Number(quote.credits):"…"} 积分</strong></span><span>可用 {wallet?Number(wallet.available):"…"} 积分</span></div>
     <p className="video-billing-note">统一使用平台积分，按实际生成费用结算，不额外加价。提交时预授权，未使用的积分自动退回。</p>
     {error&&<p className="inline-error" role="alert">{error}</p>}
-    {reason&&<p id="video-submit-reason" className="video-submit-reason" role="status">{reason}</p>}
+    {reason&&<p id="video-submit-reason" className="video-submit-reason" role="status">{reason}{reason.includes("体验口令")&&<> · <button type="button" className="plain-button" onClick={openWalletDialog}>输入体验码</button></>}</p>}
     <button className="studio-submit video-submit" type="submit" disabled={!!reason} aria-describedby={reason?"video-submit-reason":undefined}>
       {busy?<><LoaderCircle size={17} className="spin"/>正在生成</>:<><Sparkles size={17}/>生成视频</>}
     </button>
