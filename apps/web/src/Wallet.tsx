@@ -29,6 +29,14 @@ export function useWallet(live=false){
 }
 const short=(value:string)=>value.includes(".")?value.replace(/\.?0+$/,""):value;
 const passcodeLabels:Record<string,string>={active:"生效中",exhausted:"额度已用完",expired:"已过期",revoked:"已吊销"};
+const ledgerLabels:Record<string,string>={
+  welcome:"新用户赠送",
+  passcode_grant:"体验口令额度补充",
+  release:"预授权已释放",
+  consumption:"模型用量消费",
+  media_consumption:"视频生成消费",
+  balance_adjustment:"余额调整",
+};
 
 function WalletDialog({onClose}:{onClose:()=>void}){
   const queryClient=useQueryClient();
@@ -105,7 +113,13 @@ function WalletDialog({onClose}:{onClose:()=>void}){
     <h3 className="wallet-ledger-title">积分明细</h3>
     {ledger?.pending.map(call=><div className="wallet-pending" key={call.id}><span>{call.status==="uncertain"?"待核对用量":"生成中 · 预授权"}<small>{date(call.created_at)}</small></span><strong>冻结 {call.reserved} 积分</strong>{call.status==="uncertain"&&<p>供应商未返回可确认的用量，维护者核对后结算或释放。调用 ID：<code>{call.id}</code></p>}</div>)}
     {isLoading&&<p className="muted">加载明细…</p>}{ledgerError&&<p className="inline-error">{ledgerError.message}</p>}
-    <div className="wallet-ledger">{ledger?.items.map(item=><div className="wallet-entry" key={item.id}><div><strong>{item.kind==="welcome"?"新用户赠送":item.kind==="passcode_grant"?"体验口令额度补充":item.kind==="release"?"预授权已释放":item.kind==="media_consumption"?"视频生成消费":"模型用量消费"}</strong><small>{date(item.created_at)}</small>{item.kind==="consumption"&&<span>输入 {item.input_tokens.toLocaleString()} · 输出 {item.output_tokens.toLocaleString()} token</span>}</div><b className={item.kind==="welcome"||item.kind==="passcode_grant"?"positive":""}>{item.kind==="welcome"||item.kind==="passcode_grant"?"+":""}{item.amount}</b></div>)}</div>
+    <div className="wallet-ledger">{ledger?.items.map(item=>{
+      const added=Number(item.amount)>0;
+      return <div className="wallet-entry" key={item.id}>
+        <div><strong>{ledgerLabels[item.kind]??"积分流水"}</strong><small>{date(item.created_at)}</small>{item.kind==="consumption"&&<span>输入 {item.input_tokens.toLocaleString()} · 输出 {item.output_tokens.toLocaleString()} token</span>}</div>
+        <b className={added?"positive":""}>{added?"+":""}{item.amount}</b>
+      </div>;
+    })}</div>
     <div className="wallet-pagination">{before&&<button onClick={()=>setBefore(null)}>回到最新</button>}{ledger?.next_before&&<button onClick={()=>setBefore(ledger.next_before)}>更早记录</button>}</div>
     <p className="wallet-explanation">同一浏览器沿用该 ID。清除 Cookie 或换浏览器将成为另一位匿名用户，原项目和余额无法自动找回。</p>
   </Modal>

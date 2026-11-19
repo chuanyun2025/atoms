@@ -95,6 +95,14 @@ describe("WalletButton and ledger modal", () => {
               output_tokens: 400,
               created_at: 1763000000,
             },
+            {
+              id: "led_2",
+              kind: "balance_adjustment",
+              amount: "-10",
+              input_tokens: 0,
+              output_tokens: 0,
+              created_at: 1763000050,
+            },
           ],
           pending: [
             {
@@ -139,6 +147,9 @@ describe("WalletButton and ledger modal", () => {
     expect(dialog?.textContent).toContain("待核对用量");
     expect(dialog?.textContent).toContain("call_uncertain_1");
     expect(dialog?.textContent).toContain("模型用量消费");
+    const adjustment = Array.from(dialog?.querySelectorAll(".wallet-entry") ?? [])
+      .find(row => row.querySelector("strong")?.textContent === "余额调整");
+    expect(adjustment?.querySelector("b")?.textContent).toBe("-10");
     expect(dialog?.querySelector('[data-testid="public-budget-banner"]')?.textContent).toContain("今日公共体验额度已达上限");
 
     const codeInput = dialog?.querySelector<HTMLInputElement>('input[aria-label="输入体验口令"]');
