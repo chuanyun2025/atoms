@@ -41,7 +41,7 @@ function VideoForm({pid,initial,prompt:initialPrompt="",resolution="540p",busy,u
   useEffect(()=>()=>reader.current?.abort(),[]);
   const imageAssetId=removed?undefined:initial?.image_asset_id||undefined;
   const poster=dataUrl||(pid&&imageAssetId?mediaUrl(pid,imageAssetId):"");
-  const reason=busy?"视频正在生成，可以离开页面，结果会保存在项目中。":unavailableReason|| (reading?"正在读取参考图片…":!prompt.trim()?"请先描述你想生成的视频":quoteError?"费用预估暂不可用，请稍后重试":walletError?"积分余额暂不可用，请刷新页面":!quote||!wallet?"正在计算费用和读取积分…":wallet.available_units<quote.required_units?"可用积分不足，请缩短视频时长后再试":"");
+  const reason=busy?"视频正在生成，可以离开页面，结果会保存在项目中。":unavailableReason|| (reading?"正在读取参考图片…":!prompt.trim()?"请先描述你想生成的视频":quoteError?"费用暂不可用，请稍后重试":walletError?"积分余额暂不可用，请刷新页面":!quote||!wallet?"正在读取费用和可用积分…":wallet.available_units<quote.required_units?`可用积分不足，生成一条视频需要 ${quote.credits} 积分`:"");
   function chooseImage(selected?:File) {
     if(!selected)return;
     setImageError("");
@@ -79,8 +79,8 @@ function VideoForm({pid,initial,prompt:initialPrompt="",resolution="540p",busy,u
       </select></label>
       <label className="video-audio"><input type="checkbox" checked={audio} disabled={busy} onChange={event=>setAudio(event.target.checked)}/>生成声音</label>
     </div>
-    <div className="video-quote"><span>预计使用 <strong>{quote?Number(quote.credits):"…"} 积分</strong></span><span>可用 {wallet?Number(wallet.available):"…"} 积分</span></div>
-    <p className="video-billing-note">统一使用平台积分，按实际生成费用进一法取整结算（不足 1 积分按 1 积分计费），不额外加价。提交时预授权，未使用的积分自动退回。</p>
+    <div className="video-quote"><span>每条 <strong>{quote?.credits??"…"} 积分</strong></span><span>可用 {wallet?.available??"…"} 积分</span></div>
+    <p className="video-billing-note">提交时预授权，视频生成成功后扣费。确认生成失败后退回预授权积分。</p>
     {error&&<p className="inline-error" role="alert">{error}</p>}
     {reason&&<p id="video-submit-reason" className="video-submit-reason" role="status">{reason}{reason.includes("体验口令")&&<> · <button type="button" className="plain-button" onClick={openWalletDialog}>输入体验码</button></>}</p>}
     <button className="studio-submit video-submit" type="submit" disabled={!!reason} aria-describedby={reason?"video-submit-reason":undefined}>

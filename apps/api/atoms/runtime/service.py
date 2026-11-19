@@ -240,27 +240,7 @@ def create_run(conn, owner, project_id, data, idempotency_key, ip):
     if not worker or worker["heartbeat_at"] < now - 20 or worker["lease_until"] < now:
         error(503, "worker_unavailable", "生成服务正在启动，请稍后重试")
     try:
-        if row["kind"] == "video":
-            from atoms.billing import media_credits
-            from atoms.billing.passcodes import authorize_paid_action
-
-            reusing_video_call = bool(source_job and source_job["video_call_id"] and video_job["provider_task_id"])
-            if not reusing_video_call:
-                est_credits = media_credits.estimated_usage(
-                    video_job["model"], video_job["resolution"], video_job["duration"]
-                )
-                est_units = media_credits.convert(est_credits, settings().vidu_credit_price_cny)
-                if (
-                    one(
-                        conn,
-                        "SELECT balance_units - held_units AS a FROM credit_wallets WHERE visitor_id=:id",
-                        id=owner,
-                    )["a"]
-                    < est_units
-                ):
-                    raise CreditError("insufficient_credits", "可用积分不足，请调整视频时长后再试")
-                authorize_paid_action(conn, owner, minimum_units=est_units, video=True)
-        elif not recoverable:
+        if row["kind"] != "video" and not recoverable:
             require_balance(conn, owner, len(data.prompt.encode("utf-8")))
     except CreditError as e:
         _raise_credit_http(e)
@@ -632,7 +612,8 @@ def run_inspector(conn, rid: str, owner: str) -> dict:
     media_rows = all_rows(
         conn,
         """SELECT m.id,m.purpose,m.status,m.estimated_provider_credits,m.actual_provider_credits,
-        m.credit_price_cny,m.reserved_units,m.error_code,m.whole_credit_billing,l.amount_units AS ledger_amount_units
+        m.credit_price_cny,m.reserved_units,m.error_code,m.whole_credit_billing,m.fixed_price,
+        l.amount_units AS ledger_amount_units
         FROM media_calls m
         LEFT JOIN credit_ledger l ON l.media_call_id=m.id AND l.kind IN ('consumption','media_consumption')
         WHERE m.run_id=:id OR m.active_run_id=:id ORDER BY m.created_at ASC""",
@@ -642,7 +623,7 @@ def run_inspector(conn, rid: str, owner: str) -> dict:
     for row in media_rows:
         if row["ledger_amount_units"] is not None:
             settled_units = -int(row["ledger_amount_units"])
-        elif row["status"] == "settled" and row["actual_provider_credits"] is not None:
+        elif row["status"] == "settled" and (row["fixed_price"] or row["actual_provider_credits"] is not None):
             from atoms.billing import media_credits
 
             settled_units = media_credits.call_cost_units(row, row["actual_provider_credits"])

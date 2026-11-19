@@ -115,11 +115,11 @@ def test_passcode_cli_redemption_video_unlock_and_revocation(client, monkeypatch
     monkeypatch.setattr(
         sys,
         "argv",
-        ["ops", "passcode-create", "--label", "面试官体验码", "--credits", "50.01", "--max-visitors", "1"],
+        ["ops", "passcode-create", "--label", "面试官体验码", "--credits", "150.01", "--max-visitors", "1"],
     )
     ops.main()
     created = json.loads(capsys.readouterr().out.strip())
-    assert created["budget"] == "50.01" and created["budget_units"] == 50_010_000
+    assert created["budget"] == "150.01" and created["budget_units"] == 150_010_000
     raw_code = created["code"]
     passcode_id = created["id"]
 
@@ -153,8 +153,8 @@ def test_passcode_cli_redemption_video_unlock_and_revocation(client, monkeypatch
     assert guard["daily_budget_reached"] is False
     assert guard["video_unlocked"] is True
     assert guard["passcode"]["label"] == "面试官体验码"
-    assert guard["passcode"]["remaining"] == "50.01"
-    assert redeem_res.json()["available"] == "50.01"
+    assert guard["passcode"]["remaining"] == "150.01"
+    assert redeem_res.json()["available"] == "150.01"
 
     # Second visitor cannot exceed max_visitors=1
     with TestClient(app, base_url="http://localhost:8080") as second:
@@ -196,9 +196,9 @@ def test_passcode_cli_redemption_video_unlock_and_revocation(client, monkeypatch
     ops.main()
     listed = json.loads(capsys.readouterr().out)["items"]
     assert listed[0]["id"] == passcode_id
-    assert listed[0]["budget"] == "50.01"
+    assert listed[0]["budget"] == "150.01"
     assert Decimal(listed[0]["spent"]) > 0
-    assert Decimal(listed[0]["held"]) > 0
+    assert Decimal(listed[0]["held"]) == 100
 
     # Revoke passcode via CLI -> next run submission is immediately blocked!
     monkeypatch.setattr(sys, "argv", ["ops", "passcode-revoke", passcode_id])

@@ -1,4 +1,4 @@
-"""At-cost media metering in the existing platform wallet, without token fabrication."""
+"""Media reservations and settlement in the platform wallet."""
 
 import time
 from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal
@@ -20,6 +20,8 @@ from atoms.core.security_ids import uid
 VIDEO_RATES = {"540p": 9, "720p": 20, "1080p": 24}
 LEGACY_Q4_RATES = {"540p": 9, "720p": 19, "1080p": 24, "2K": 38, "4K": 78}
 PLATFORM_CREDITS_PER_YUAN = 10
+VIDEO_PRICE = 100
+VIDEO_PRICE_UNITS = VIDEO_PRICE * SCALE
 
 
 def convert(provider_credits, price, *, whole_credits=True):
@@ -30,6 +32,8 @@ def convert(provider_credits, price, *, whole_credits=True):
 
 
 def call_cost_units(call, provider_credits):
+    if call["fixed_price"]:
+        return call["reserved_units"]
     return convert(provider_credits, call["credit_price_cny"], whole_credits=bool(call["whole_credit_billing"]))
 
 
@@ -39,10 +43,9 @@ def estimated_usage(model, resolution, duration):
 
 def quote(duration):
     cfg = settings()
-    video = convert(VIDEO_RATES[cfg.vidu_resolution] * duration, cfg.vidu_credit_price_cny)
     return {
-        "credits": amount(video),
-        "required_units": video,
+        "credits": amount(VIDEO_PRICE_UNITS),
+        "required_units": VIDEO_PRICE_UNITS,
         "model": cfg.vidu_model,
         "resolution": cfg.vidu_resolution,
         "duration": duration,
@@ -51,17 +54,18 @@ def quote(duration):
 
 def reserve(conn, run_id, owner, purpose, provider_credits):
     price = settings().vidu_credit_price_cny
-    held = convert(provider_credits, price)
-    if wallet(conn, owner)["available_units"] < held:
-        raise CreditError("insufficient_credits", "可用积分不足，请调整视频时长后再试")
+    fixed_price = purpose == "video"
+    held = VIDEO_PRICE_UNITS if fixed_price else convert(provider_credits, price)
     passcode_id, _ = authorize_paid_action(conn, owner, minimum_units=held, video=True)
+    if wallet(conn, owner)["available_units"] < held:
+        raise CreditError("insufficient_credits", f"可用积分不足，本次生成需要 {amount(held)} 积分")
     call_id = uid()
     now = time.time()
     execute(
         conn,
         """INSERT INTO media_calls(id,visitor_id,run_id,active_run_id,purpose,status,reserved_units,
-        estimated_provider_credits,credit_price_cny,passcode_id,created_at,whole_credit_billing)
-        VALUES(:id,:owner,:run,:run,:purpose,'reserved',:held,:estimate,:price,:passcode,:now,1)""",
+        estimated_provider_credits,credit_price_cny,passcode_id,created_at,whole_credit_billing,fixed_price)
+        VALUES(:id,:owner,:run,:run,:purpose,'reserved',:held,:estimate,:price,:passcode,:now,1,:fixed)""",
         id=call_id,
         owner=owner,
         run=run_id,
@@ -71,6 +75,7 @@ def reserve(conn, run_id, owner, purpose, provider_credits):
         price=str(price),
         passcode=passcode_id,
         now=now,
+        fixed=fixed_price,
     )
     execute(
         conn,
@@ -118,14 +123,22 @@ def settle(conn, call_id, provider_credits):
     if not row:
         raise CreditError("MEDIA_CALL_MISSING", "媒体用量记录不存在")
     if row["status"] == "settled":
-        if provider_credits is not None and row["actual_provider_credits"] != provider_credits:
+        if (
+            not row["fixed_price"]
+            and provider_credits is not None
+            and row["actual_provider_credits"] != provider_credits
+        ):
             raise CreditError("USAGE_CONFLICT", "该媒体任务已按其他用量结算")
         return
     if row["status"] == "released":
         raise CreditError("CALL_RELEASED", "媒体预授权已释放，请核对后再结算")
     if type(provider_credits) is not int or provider_credits < 0:
-        execute(conn, "UPDATE media_calls SET status='uncertain',error_code='MISSING_USAGE' WHERE id=:id", id=call_id)
-        return
+        if not row["fixed_price"]:
+            execute(
+                conn, "UPDATE media_calls SET status='uncertain',error_code='MISSING_USAGE' WHERE id=:id", id=call_id
+            )
+            return
+        provider_credits = None
     cost = call_cost_units(row, provider_credits)
     if cost > row["reserved_units"]:
         execute(

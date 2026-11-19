@@ -44,6 +44,7 @@ def start(client, project, image=None, **extra):
     )
 
 
+@pytest.mark.usefixtures("funded_video_wallet")
 def test_native_video_version_playback_download_and_private_assets(client):
     project, image = project_and_image(client)
     response = start(client, project, image)
@@ -154,6 +155,7 @@ def test_uncertain_paid_submission_is_not_automatically_repeated():
     assert len(calls) == 1
 
 
+@pytest.mark.usefixtures("funded_video_wallet")
 def test_resume_queries_existing_provider_task_without_resubmission(client, monkeypatch):
     project, image = project_and_image(client)
     assert start(client, project, image).status_code == 202
@@ -197,6 +199,7 @@ def test_media_downloader_blocks_private_network_addresses():
             asyncio.run(video.public_media_url(url))
 
 
+@pytest.mark.usefixtures("funded_video_wallet")
 def test_backup_and_offline_restore_include_native_media(client, monkeypatch, tmp_path):
     import sys
 

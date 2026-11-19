@@ -80,6 +80,13 @@ def client():
         yield value
 
 
+@pytest.fixture
+def funded_video_wallet(client):
+    visitor_id = client.get("/api/v1/wallet").json()["visitor_id"]
+    with transaction(True) as conn:
+        execute(conn, "UPDATE credit_wallets SET balance_units=201000000 WHERE visitor_id=:id", id=visitor_id)
+
+
 def create_project(client):
     response = client.post("/api/v1/projects", json={"client_key": "project-test-key", "title": "测试项目"})
     assert response.status_code == 201, response.text

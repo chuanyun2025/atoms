@@ -121,7 +121,7 @@ def test_run_inspector_exposes_sanitized_plan_repair_validation_and_exact_ledger
         assert denied.json()["detail"]["code"] == "run_not_found"
 
 
-def test_run_inspector_reports_settled_video_media_consumption_credits(client):
+def test_run_inspector_reports_settled_video_media_consumption_credits(client, funded_video_wallet):
     from atoms.billing import media_credits
     from atoms.core.db import execute, one, transaction
 
@@ -155,5 +155,5 @@ def test_run_inspector_reports_settled_video_media_consumption_credits(client):
     wallet = client.get("/api/v1/wallet").json()
     inspector = client.get(f"/api/v1/runs/{rid}/inspector").json()
     assert len(inspector["billing"]["media_calls"]) == 1
-    assert inspector["billing"]["media_calls"][0]["settled_units"] > 0
-    assert inspector["billing"]["total_settled_credits"] == wallet["spent"]
+    assert inspector["billing"]["media_calls"][0]["settled_units"] == 100_000_000
+    assert inspector["billing"]["total_settled_credits"] == wallet["spent"] == "100"

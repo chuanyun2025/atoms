@@ -20,7 +20,8 @@ from atoms.domains.media import asset_path
 DISPATCH_SCHEMA = "0011_model_call_dispatch"
 INDEX_SCHEMA = "0012_query_indexes"
 PASSCODE_SCHEMA = "0013_public_budget_and_passcodes"
-CURRENT_SCHEMA = "0014_whole_credit_billing"
+WHOLE_CREDIT_SCHEMA = "0014_whole_credit_billing"
+CURRENT_SCHEMA = "0015_fixed_video_price"
 SUPPORTED_SCHEMAS = {
     "0007",
     "0008",
@@ -30,6 +31,7 @@ SUPPORTED_SCHEMAS = {
     DISPATCH_SCHEMA,
     INDEX_SCHEMA,
     PASSCODE_SCHEMA,
+    WHOLE_CREDIT_SCHEMA,
     CURRENT_SCHEMA,
 }
 
@@ -220,9 +222,9 @@ def main():
         )
         if report["schema"] != "0007":
             target.execute("UPDATE worker_status SET video_configured=0,text_model=NULL")
-        if report["schema"] in {"0009", "0010", DISPATCH_SCHEMA, PASSCODE_SCHEMA, CURRENT_SCHEMA}:
+        if report["schema"] in {"0009", "0010", DISPATCH_SCHEMA, PASSCODE_SCHEMA, WHOLE_CREDIT_SCHEMA, CURRENT_SCHEMA}:
             target.execute("UPDATE run_workspace SET compiled_json=NULL,digest=NULL")
-        if report["schema"] in {DISPATCH_SCHEMA, PASSCODE_SCHEMA, CURRENT_SCHEMA}:
+        if report["schema"] in {DISPATCH_SCHEMA, PASSCODE_SCHEMA, WHOLE_CREDIT_SCHEMA, CURRENT_SCHEMA}:
             now = time.time()
             pending = target.execute("""SELECT id,visitor_id,run_id,reserved_units FROM model_calls
                 WHERE status='in_flight' AND dispatch_pending=1""").fetchall()
