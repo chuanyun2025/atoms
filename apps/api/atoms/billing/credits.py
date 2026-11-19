@@ -1,8 +1,8 @@
-"""Exact integer accounting; a unit is 0.000001 credit."""
+"""Model billing and wallet accounting in units of 0.000001 credit."""
 
 import time
-from decimal import Decimal
 
+from atoms.billing.amounts import SCALE, amount, ceil_credit_units
 from atoms.billing.passcodes import (
     authorize_paid_action,
     hold_passcode_units,
@@ -13,8 +13,8 @@ from atoms.billing.passcodes import (
 from atoms.core.db import all_rows, execute, one, transaction
 from atoms.core.security_ids import uid
 
-SCALE = 1_000_000
-WELCOME = 500 * SCALE
+WELCOME_CREDITS = 50
+WELCOME = WELCOME_CREDITS * SCALE
 INPUT_RATE = 20
 OUTPUT_RATE = 80
 
@@ -25,8 +25,9 @@ class CreditError(Exception):
         super().__init__(message)
 
 
-def amount(units):
-    return format(Decimal(units) / SCALE, ".6f")
+def model_cost_units(input_tokens: int, output_tokens: int, *, whole_credits: bool) -> int:
+    raw_units = input_tokens * INPUT_RATE + output_tokens * OUTPUT_RATE
+    return ceil_credit_units(raw_units) if whole_credits else raw_units
 
 
 def ensure_wallet(conn, visitor_id):
@@ -63,7 +64,7 @@ def wallet(conn, visitor_id):
         "balance_units": row["balance_units"],
         "held_units": row["held_units"],
         "available_units": row["balance_units"] - row["held_units"],
-        "welcome_credits": 500,
+        "welcome_credits": WELCOME_CREDITS,
         "credits_per_yuan": 10,
         "pricing": {"input_per_million": 20, "output_per_million": 80},
         "guardrails": public_guardrail_status(conn, visitor_id),
@@ -106,7 +107,7 @@ def transactions(conn, visitor_id, before=None):
 
 def require_balance(conn, visitor_id, prompt_bytes: int = 0):
     balance = wallet(conn, visitor_id)
-    minimum = max(INPUT_RATE + OUTPUT_RATE, prompt_bytes * INPUT_RATE + OUTPUT_RATE)
+    minimum = ceil_credit_units(max(INPUT_RATE + OUTPUT_RATE, prompt_bytes * INPUT_RATE + OUTPUT_RATE))
     if balance["available_units"] < minimum:
         raise CreditError("insufficient_credits", "可用积分不足，无法继续生成；已有项目仍可查看和导出")
     authorize_paid_action(conn, visitor_id, minimum_units=minimum, video=False)
@@ -129,16 +130,20 @@ def reserve_call(run, attempt, input_ceiling, provider_output_limit):
             raise CreditError("CALL_ALREADY_STARTED", "该次模型请求已执行，不自动重复发送")
         available = wallet(conn, run["owner_id"])["available_units"]
         input_hold = input_ceiling * INPUT_RATE
-        if available < input_hold + OUTPUT_RATE:
+        min_hold = ceil_credit_units(input_hold + OUTPUT_RATE)
+        if available < min_hold:
             raise CreditError("insufficient_credits", "可用积分不足以预授权本次输入和输出，请查看积分明细")
         passcode_id, pool_cap = authorize_paid_action(
-            conn, run["owner_id"], minimum_units=input_hold + OUTPUT_RATE, video=False, now=now
+            conn, run["owner_id"], minimum_units=min_hold, video=False, now=now
         )
         effective_available = min(available, pool_cap) if pool_cap is not None else available
-        output_limit = min(provider_output_limit, (effective_available - input_hold) // OUTPUT_RATE)
+        max_hold = (effective_available // SCALE) * SCALE
+        if max_hold < min_hold:
+            raise CreditError("insufficient_credits", "可用积分不足以预授权本次输入和输出，请查看积分明细")
+        output_limit = min(provider_output_limit, (max_hold - input_hold) // OUTPUT_RATE)
         if output_limit < 1:
             raise CreditError("insufficient_credits", "可用积分不足以预授权本次输入和输出，请查看积分明细")
-        held = input_hold + output_limit * OUTPUT_RATE
+        held = ceil_credit_units(input_hold + output_limit * OUTPUT_RATE)
         call = {
             "id": uid(),
             "visitor_id": run["owner_id"],
@@ -152,8 +157,9 @@ def reserve_call(run, attempt, input_ceiling, provider_output_limit):
         }
         execute(
             conn,
-            """INSERT INTO model_calls(id,visitor_id,run_id,attempt,lease_token,status,dispatch_pending,reserved_units,input_ceiling,output_limit,passcode_id,created_at)
-        VALUES(:id,:owner,:run,:attempt,:lease,'in_flight',1,:held,:input,:output,:passcode,:now)""",
+            """INSERT INTO model_calls(id,visitor_id,run_id,attempt,lease_token,status,dispatch_pending,reserved_units,
+        input_ceiling,output_limit,passcode_id,created_at,whole_credit_billing)
+        VALUES(:id,:owner,:run,:attempt,:lease,'in_flight',1,:held,:input,:output,:passcode,:now,1)""",
             id=call["id"],
             owner=call["visitor_id"],
             run=call["run_id"],
@@ -211,15 +217,15 @@ def settle_call(call, input_tokens, output_tokens, provider_request_id=None, ope
         row = one(conn, "SELECT * FROM model_calls WHERE id=:id", id=call["id"])
         if not row or (not operator and row["lease_token"] != call["lease_token"]):
             raise CreditError("CALL_IDENTITY", "积分调用标识不匹配")
+        cost = model_cost_units(input_tokens, output_tokens, whole_credits=bool(row["whole_credit_billing"]))
         if row["status"] == "settled":
             if (row["input_tokens"], row["output_tokens"]) != (input_tokens, output_tokens):
                 raise CreditError("USAGE_CONFLICT", "该调用已按不同用量结算")
-            return amount(input_tokens * INPUT_RATE + output_tokens * OUTPUT_RATE)
+            return amount(cost)
         if row["status"] == "released":
             raise CreditError("CALL_RELEASED", "该调用已释放，请先人工核对")
         if row["dispatch_pending"]:
             raise CreditError("CALL_NOT_DISPATCHED", "模型请求尚未发送")
-        cost = input_tokens * INPUT_RATE + output_tokens * OUTPUT_RATE
         if input_tokens > row["input_ceiling"] or output_tokens > row["output_limit"] or cost > row["reserved_units"]:
             execute(
                 conn,

@@ -7,20 +7,16 @@ from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from atoms.billing.amounts import SCALE, amount
 from atoms.core.config import settings
 from atoms.core.db import all_rows, execute, maintenance, one, transaction
 from atoms.core.security import enforce_rate_limit, error
 from atoms.core.security_ids import uid
 
-SCALE = 1_000_000
 _FALLBACK_OFFSETS = {
     "Asia/Shanghai": timezone(timedelta(hours=8), name="CST"),
     "UTC": UTC,
 }
-
-
-def _fmt_credits(units: int) -> str:
-    return format(Decimal(units) / SCALE, ".6f")
 
 
 def _resolve_tz(name: str):
@@ -103,7 +99,7 @@ def create_passcode(
         "id": pid,
         "code": plaintext,
         "label": clean_label,
-        "budget": _fmt_credits(budget_units),
+        "budget": amount(budget_units),
         "budget_units": budget_units,
         "max_visitors": max_visitors,
         "bypass_daily_budget": bypass_daily_budget,
@@ -128,7 +124,7 @@ def list_passcodes(conn) -> list[dict]:
             else "expired"
             if row["expires_at"] is not None and row["expires_at"] <= now
             else "exhausted"
-            if remaining <= 0
+            if remaining < SCALE
             else "active"
         )
         items.append(
@@ -136,10 +132,10 @@ def list_passcodes(conn) -> list[dict]:
                 "id": row["id"],
                 "label": row["label"],
                 "status": status,
-                "budget": _fmt_credits(row["budget_units"]),
-                "spent": _fmt_credits(row["spent_units"]),
-                "held": _fmt_credits(row["held_units"]),
-                "remaining": _fmt_credits(remaining),
+                "budget": amount(row["budget_units"]),
+                "spent": amount(row["spent_units"]),
+                "held": amount(row["held_units"]),
+                "remaining": amount(remaining),
                 "bound_visitors": row["bound_visitors"],
                 "max_visitors": row["max_visitors"],
                 "bypass_daily_budget": bool(row["bypass_daily_budget"]),
@@ -220,17 +216,17 @@ def visitor_passcode(conn, visitor_id: str, now: float | None = None) -> dict | 
         else "expired"
         if row["expires_at"] is not None and row["expires_at"] <= ts
         else "exhausted"
-        if remaining <= 0
+        if remaining < SCALE
         else "active"
     )
     return {
         "id": row["id"],
         "label": row["label"],
         "status": status,
-        "budget": _fmt_credits(row["budget_units"]),
-        "spent": _fmt_credits(row["spent_units"]),
-        "held": _fmt_credits(row["held_units"]),
-        "remaining": _fmt_credits(remaining),
+        "budget": amount(row["budget_units"]),
+        "spent": amount(row["spent_units"]),
+        "held": amount(row["held_units"]),
+        "remaining": amount(remaining),
         "remaining_units": remaining,
         "bypass_daily_budget": bool(row["bypass_daily_budget"]),
         "allow_video": bool(row["allow_video"]),
@@ -248,13 +244,13 @@ def public_guardrail_status(conn, visitor_id: str, now: float | None = None) -> 
     remaining_units = max(0, cap_units - used_units)
     active_passcode = bound and bound["status"] == "active"
     budget_reached = bool(
-        budget_enabled and remaining_units <= 0 and not (active_passcode and bound["bypass_daily_budget"])
+        budget_enabled and remaining_units < SCALE and not (active_passcode and bound["bypass_daily_budget"])
     )
     video_unlocked = bool(cfg.allows_public_video() or (active_passcode and bound["allow_video"]))
     return {
         "daily_budget_enabled": budget_enabled,
-        "daily_budget_credits": _fmt_credits(cap_units),
-        "daily_remaining_credits": _fmt_credits(remaining_units),
+        "daily_budget_credits": amount(cap_units),
+        "daily_remaining_credits": amount(remaining_units),
         "daily_budget_reached": budget_reached,
         "reset_at": reset_at,
         "reset_label": reset_label,
@@ -280,7 +276,7 @@ def redeem_passcode(conn, visitor_id: str, raw_code: str, ip: str) -> dict:
     if row["expires_at"] is not None and row["expires_at"] <= now:
         error(403, "passcode_expired", "该体验口令已过期")
     remaining = row["budget_units"] - row["spent_units"] - row["held_units"]
-    if remaining <= 0:
+    if remaining < SCALE:
         error(402, "passcode_exhausted", "该体验口令额度已用完")
 
     already_bound = one(

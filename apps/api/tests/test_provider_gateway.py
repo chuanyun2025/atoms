@@ -533,8 +533,8 @@ def test_total_generation_timeout_preserves_usage_and_settles_wallet(client, mon
     with transaction() as conn:
         call = one(conn, "SELECT status, provider_request_id FROM model_calls WHERE run_id=:id", id=run["id"])
     if has_usage:
-        assert wallet["spent"] == "0.000900" and wallet["held_units"] == 0
+        assert wallet["spent"] == "1" and wallet["held_units"] == 0
         assert call == {"status": "settled", "provider_request_id": "req-total-timeout"}
     else:
-        assert wallet["spent"] == "0.000000" and wallet["held_units"] == 64000
+        assert wallet["spent"] == "0" and wallet["held_units"] == 1_000_000
         assert call == {"status": "uncertain", "provider_request_id": None}

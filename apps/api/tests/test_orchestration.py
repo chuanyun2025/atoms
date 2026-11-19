@@ -377,4 +377,4 @@ def test_planner_call_is_accounted(client, monkeypatch):
     assert result.rendering == "canvas2d"
     assert client.get("/api/v1/runs/" + run["id"]).json()["model_calls"] == 1
     wallet = client.get("/api/v1/wallet").json()
-    assert wallet["held"] == "0.000000" and wallet["spent"] == "0.015600"
+    assert wallet["held"] == "0" and wallet["spent"] == "1"

@@ -196,7 +196,7 @@ def capabilities(session=Depends(read_visitor)):
         "scope": "React / TypeScript 网站与游戏、网页幻灯片、Vidu 图生视频",
         "limits": {
             "billing": "credits",
-            "initial_credits": 500,
+            "initial_credits": credits.WELCOME_CREDITS,
             "input_credits_per_million": 20,
             "output_credits_per_million": 80,
         },

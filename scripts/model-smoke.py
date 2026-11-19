@@ -1,6 +1,8 @@
 """Real model smoke test. Does not send requests when model is unconfigured."""
 import time
 import uuid
+from decimal import Decimal
+
 import httpx
 
 base="http://localhost:8080"
@@ -22,11 +24,15 @@ for _ in range(200):
         print(state["stage"],flush=True);last=state["stage"]
     if state["status"]=="succeeded":
         version=client.get("/api/v1/projects/"+project["id"]+"/versions/"+state["result_version_id"]).raise_for_status().json()
-        assert set(version["artifact"]["files"])=={"index.html","styles.css","app.js"}
+        artifact=version["artifact"]
+        assert artifact["schema_version"] == "2" and artifact["files"].get("src/App.tsx")
         wallet=client.get("/api/v1/wallet").raise_for_status().json()
         ledger=client.get("/api/v1/wallet/transactions").raise_for_status().json()
-        assert wallet["held_units"]==0 and wallet["spent"]!="0.000000"
-        assert any(entry["kind"]=="consumption" for entry in ledger["items"])
+        assert wallet["held_units"] == 0 and Decimal(wallet["spent"]) > 0
+        assert any(
+            entry["kind"] == "consumption" and entry["run_id"] == run["id"] and entry["amount_units"] < 0
+            for entry in ledger["items"]
+        )
         print("真实模型响应、产物校验、隔离启动与版本交付：PASS")
         print("Actual token charge: "+wallet["spent"]+" credits; available: "+wallet["available"])
         print("后续请在浏览器验证计数交互和刷新保存；脚本不替代业务验收。")

@@ -99,9 +99,9 @@ function WalletDialog({onClose}:{onClose:()=>void}){
         {passcodeMsg&&<p className="positive" role="status">{passcodeMsg}</p>}
         {passcodeErr&&<p className="inline-error" role="alert">{passcodeErr}</p>}
       </div>
-      <div className="wallet-gift"><Gift size={19}/><div><strong>新用户赠送 {wallet.welcome_credits} 积分</strong><span>{wallet.credits_per_yuan} 积分 = 1 元 · 500 积分相当于 50 元使用额度</span></div></div>
+      <div className="wallet-gift"><Gift size={19}/><div><strong>新用户赠送 {wallet.welcome_credits} 积分</strong><span>{wallet.credits_per_yuan} 积分 = 1 元 · {wallet.welcome_credits} 积分相当于 {wallet.welcome_credits / wallet.credits_per_yuan} 元使用额度</span></div></div>
       <div className="wallet-pricing"><span>输入 1,000,000 token <strong>{wallet.pricing.input_per_million} 积分</strong></span><span>输出 1,000,000 token <strong>{wallet.pricing.output_per_million} 积分</strong></span></div>
-      <p className="wallet-explanation">生成、修改和自动修复按接口返回的真实用量结算，校验失败但已产生的用量也会计费。视频按供应商实际费用折算平台积分，不额外加价。当前无需登录，无充值或支付功能。</p></>:<div className="wallet-loading"><LoaderCircle className="spin" size={18}/>正在读取积分</div>}
+      <p className="wallet-explanation">生成、修改和自动修复按每次模型调用的实际用量向上取整，校验失败但已产生的用量也会计费。每次视频生成按供应商实际费用折算积分，再向上取整。当前无需登录，无充值或支付功能。</p></>:<div className="wallet-loading"><LoaderCircle className="spin" size={18}/>正在读取积分</div>}
     <h3 className="wallet-ledger-title">积分明细</h3>
     {ledger?.pending.map(call=><div className="wallet-pending" key={call.id}><span>{call.status==="uncertain"?"待核对用量":"生成中 · 预授权"}<small>{date(call.created_at)}</small></span><strong>冻结 {call.reserved} 积分</strong>{call.status==="uncertain"&&<p>供应商未返回可确认的用量，维护者核对后结算或释放。调用 ID：<code>{call.id}</code></p>}</div>)}
     {isLoading&&<p className="muted">加载明细…</p>}{ledgerError&&<p className="inline-error">{ledgerError.message}</p>}

@@ -50,5 +50,5 @@ test("默认单槽 Worker 按提交顺序依次构建项目", async ({request, b
   expect(fourth.started_at).toBeGreaterThanOrEqual(third.finished_at);
   expect([first,second,third,fourth].map(run=>run.model_calls)).toEqual([1,1,1,1]);
   const wallet = await (await request.get("/api/v1/wallet")).json();
-  expect(wallet).toMatchObject({available:"499.776000",held:"0.000000"});
+  expect(wallet).toMatchObject({available:"46",held:"0"});
 });

@@ -17,10 +17,6 @@ const Code=lazy(()=>import("./Code"));
 const emptyEdits:Record<string,string>={};
 const publishedSourceCache=new Map<string,Record<string,string>>();
 
-function trimCredits(value:string) {
-  return value.replace(/(\.\d*?[1-9])0+$/,"$1").replace(/\.000000$/,".00");
-}
-
 function builtinSourceFiles(example:StudioExample):Record<string,string>|undefined {
   switch (example.id) {
     case "breakout":
@@ -78,6 +74,7 @@ export function ExampleShowcase({example,busy,onUsePrompt}:{example:StudioExampl
   },[view,example,files]);
 
   const story=example.buildStory;
+  const storyCredits=story?.credits.replace(/(\.\d*?[1-9])0+$|\.0+$/,"$1");
   return <div className="example-showcase">
     <div className="example-showcase-bar">
       <div className="view-tabs" role="group" aria-label="示例查看模式">
@@ -103,7 +100,7 @@ export function ExampleShowcase({example,busy,onUsePrompt}:{example:StudioExampl
             <div><span>模型调用</span><strong>{story.modelCalls} 次</strong></div>
             <div><span>自动修复</span><strong>{story.repairRounds?story.repairRounds+" 轮":"一次通过"}</strong></div>
             <div><span>输入 / 输出 Token</span><strong>{story.inputTokens.toLocaleString()} / {story.outputTokens.toLocaleString()}</strong></div>
-            <div><span>实扣积分</span><strong>{trimCredits(story.credits)} 积分</strong></div>
+            <div><span>实扣积分</span><strong>{storyCredits} 积分</strong></div>
           </div>
           <div className="build-story-card">
             <h3>真实首轮输入提示词</h3>
@@ -145,7 +142,7 @@ export function ExampleShowcase({example,busy,onUsePrompt}:{example:StudioExampl
         <span className="studio-output">{modes[example.kind].output}</span>
         <p>{example.description}</p>
         {story?<div className="example-aside-meta">
-          <span>真实耗时 {story.elapsedSeconds.toFixed(1)}s · {trimCredits(story.credits)} 积分</span>
+          <span>真实耗时 {story.elapsedSeconds.toFixed(1)}s · {storyCredits} 积分</span>
           <span>{story.repairRounds?`含 ${story.repairRounds} 轮自动修复`:"首轮校验通过"}</span>
         </div>:<div className="example-aside-meta">
           <span>内置原生交互组件示例</span>

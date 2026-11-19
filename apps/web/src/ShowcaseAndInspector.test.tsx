@@ -150,14 +150,14 @@ describe("ExampleShowcase and InspectorDrawer",()=>{
           ],
           billing:{
             calls:[
-              {attempt:1,role:"planning",status:"settled",input_tokens:2000,output_tokens:500,settled_units:80000,settled_credits:"0.080000",reserved_credits:"1.000000",error_code:null},
-              {attempt:2,role:"generation",status:"settled",input_tokens:5000,output_tokens:3000,settled_units:340000,settled_credits:"0.340000",reserved_credits:"2.000000",error_code:null},
+              {attempt:1,role:"planning",status:"settled",input_tokens:2000,output_tokens:500,settled_units:80000,settled_credits:"0.08",reserved_credits:"0.08",error_code:null},
+              {attempt:2,role:"generation",status:"settled",input_tokens:5000,output_tokens:3000,settled_units:1000000,settled_credits:"1",reserved_credits:"2",error_code:null},
             ],
             media_calls:[],
             total_input_tokens:7000,
             total_output_tokens:3500,
-            total_settled_units:420000,
-            total_settled_credits:"0.420000",
+            total_settled_units:1080000,
+            total_settled_credits:"1.08",
           },
         });
       }
@@ -189,7 +189,8 @@ describe("ExampleShowcase and InspectorDrawer",()=>{
     expect(container.textContent).toContain("游戏规则状态机（GameMechanics）");
     expect(container.textContent).toContain("COMPILE_IMPORT");
     expect(container.textContent).toContain("src/App.tsx:4");
-    expect(container.textContent).toContain("0.42 积分");
+    expect(container.textContent).toContain("0.08 积分");
+    expect(container.textContent).toContain("实扣合计：1.08 积分");
   });
 
   it("keeps every studioExample BuildStory backed by real archive snapshots and omits fabricated stories on hand-coded demos",()=>{

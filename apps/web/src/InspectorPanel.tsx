@@ -12,10 +12,6 @@ const statusLabels:Record<string,string>={
   uncertain:"待核对",
 };
 
-function trimCredits(value:string) {
-  return value.replace(/(\.\d*?[1-9])0+$/,"$1").replace(/\.000000$/,".00");
-}
-
 function InspectorBody({runId,active}:{runId:string;active:boolean}) {
   const client=useQueryClient();
   const prevActive=useRef(active);
@@ -89,26 +85,26 @@ function InspectorBody({runId,active}:{runId:string;active:boolean}) {
         </ol>:<p className="inspector-muted">首轮校验一次通过，未触发自动修复。</p>}
       </section>
 
-      <section className="inspector-section" aria-label="模型调用与微积分明细">
-        <h4>④ 模型调用与微积分账单</h4>
+      <section className="inspector-section" aria-label="模型调用与积分明细">
+        <h4>④ 模型调用与积分账单</h4>
         {data.billing.calls.length||data.billing.media_calls.length?<>
           <div className="inspector-calls">
             {data.billing.calls.map(call=><div key={call.attempt} className="inspector-call-row">
               <span>#{call.attempt} {roleLabels[call.role]||call.role}</span>
               <span>{statusLabels[call.status]||call.status}{call.error_code?` (${call.error_code})`:""}</span>
               <span>入 {(call.input_tokens??0).toLocaleString()} / 出 {(call.output_tokens??0).toLocaleString()} tok</span>
-              <strong>{trimCredits(call.settled_credits)} 积分</strong>
+              <strong>{call.settled_credits} 积分</strong>
             </div>)}
             {data.billing.media_calls.map((mc,index)=><div key={"m"+index} className="inspector-call-row">
               <span>媒体 ({mc.purpose})</span>
               <span>{statusLabels[mc.status]||mc.status}</span>
               <span>供应商用量 {mc.actual_provider_credits??"-"}</span>
-              <strong>{trimCredits(mc.settled_credits)} 积分</strong>
+              <strong>{mc.settled_credits} 积分</strong>
             </div>)}
           </div>
           <div className="inspector-totals">
             <span>合计 Token：入 {data.billing.total_input_tokens.toLocaleString()} / 出 {data.billing.total_output_tokens.toLocaleString()}</span>
-            <strong>实扣合计：{trimCredits(data.billing.total_settled_credits)} 积分</strong>
+            <strong>实扣合计：{data.billing.total_settled_credits} 积分</strong>
           </div>
         </>:<p className="inspector-muted">无付费模型调用（零积分消耗）。</p>}
       </section>

@@ -21,7 +21,7 @@ function Brand({compact=false}:{compact?:boolean}){
 }
 function Settings({onClose}:{onClose:()=>void}){
   const {data}=useCapabilities();
-  return <Modal title="工作台说明" onClose={onClose}><p className="muted">从一句需求开始，生成可以真实使用的小型网页应用。</p><div className="setting-row"><span>模型</span><strong>{data?.model||"尚未设置"}</strong></div><div className="setting-row"><span>模型服务</span><span className={data?.model_configured?"positive":"warning"}>{data?.model_configured?"已配置":"待配置"}</span></div><div className="setting-row"><span>生成服务</span><span>{data?.worker_available?"运行中":"正在连接"}</span></div><div className="setting-row"><span>视频模型</span><strong>{data?.video_model||"viduq3-pro"} · {data?.video_resolution||"540p"}</strong></div><div className="setting-row"><span>视频服务</span><span>{data?.video_configured?"已配置":"待配置"}</span></div><div className="explain"><h3>支持什么</h3><p>任务看板、表单、计算器、筛选列表和简单数据看板。应用数据按项目保存，代码可以查看、恢复版本和导出。</p><h3>使用边界</h3><p>新网站和游戏使用 React 与 TypeScript。游戏交付包含玩法设计、规则模块和可操作的预览。汇率项目可在构建时引入有日期的公开参考数据。首次赠送 500 积分，输入每百万 token 20 积分、输出每百万 token 80 积分，按实际用量结算。</p><p>当前使用匿名访客会话。请使用同一浏览器重新打开；清除 Cookie 后无法找回原项目。</p></div>{!data?.model_configured&&<div className="configuration-note">本地操作者：在 .env.local 配置 LLM_BASE_URL、LLM_MODEL 和 LLM_API_KEY 后重建 Worker。密钥不会进入前端。</div>}{!data?.video_configured&&<div className="configuration-note">视频服务：在 .env.local 填写 VIDU_API_KEY，默认模型 viduq3-pro、分辨率 540p，然后重建 API 和 Worker。</div>}</Modal>
+  return <Modal title="工作台说明" onClose={onClose}><p className="muted">从一句需求开始，生成可以真实使用的小型网页应用。</p><div className="setting-row"><span>模型</span><strong>{data?.model||"尚未设置"}</strong></div><div className="setting-row"><span>模型服务</span><span className={data?.model_configured?"positive":"warning"}>{data?.model_configured?"已配置":"待配置"}</span></div><div className="setting-row"><span>生成服务</span><span>{data?.worker_available?"运行中":"正在连接"}</span></div><div className="setting-row"><span>视频模型</span><strong>{data?.video_model||"viduq3-pro"} · {data?.video_resolution||"540p"}</strong></div><div className="setting-row"><span>视频服务</span><span>{data?.video_configured?"已配置":"待配置"}</span></div><div className="explain"><h3>支持什么</h3><p>任务看板、表单、计算器、筛选列表和简单数据看板。应用数据按项目保存，代码可以查看、恢复版本和导出。</p><h3>使用边界</h3><p>新网站和游戏使用 React 与 TypeScript。游戏交付包含玩法设计、规则模块和可操作的预览。汇率项目可在构建时引入有日期的公开参考数据。首次赠送 50 积分，输入每百万 token 20 积分、输出每百万 token 80 积分，按实际用量进一法取整结算（不足 1 积分按 1 积分计费）。</p><p>当前使用匿名访客会话。请使用同一浏览器重新打开；清除 Cookie 后无法找回原项目。</p></div>{!data?.model_configured&&<div className="configuration-note">本地操作者：在 .env.local 配置 LLM_BASE_URL、LLM_MODEL 和 LLM_API_KEY 后重建 Worker。密钥不会进入前端。</div>}{!data?.video_configured&&<div className="configuration-note">视频服务：在 .env.local 填写 VIDU_API_KEY，默认模型 viduq3-pro、分辨率 540p，然后重建 API 和 Worker。</div>}</Modal>
 }
 function Sidebar({collapsed,toggle,mobileOpen=false,closeMobile}:{collapsed:boolean;toggle:()=>void;mobileOpen?:boolean;closeMobile?:()=>void}){
   const {data}=useProjects(),{pid}=useParams();
@@ -296,7 +296,7 @@ function Workspace(){
           {failed && recoveredRuns.has(message.run_id) ? <div className="message-content">{message.run_error_code==="USER_STOPPED"?"这次构建已继续并完成。":"这次构建已修复。"}</div>
           : failed ? <BuildFailure message={message} hasVersion={!!project?.current_version_id}
             stale={(message.run_base_version_id??null)!==(project?.current_version_id??null)}
-            disabled={busy||savingSource||!!cap?.read_only||!cap?.model_configured||!cap?.worker_available||(!message.has_candidate&&(wallet?.available_units??0)<100)}
+            disabled={busy||savingSource||!!cap?.read_only||!cap?.model_configured||!cap?.worker_available||(!message.has_candidate&&(wallet?.available_units??0)<1_000_000)}
             sending={sending} onRetry={()=>void sendRun(originalPrompt(),message.run_id)}
             onPreview={retainedPreview&&runId===message.run_id?()=>{setSelected(null);setSelectedDraft(runId);switchTab("preview")}:undefined}
             onEdit={()=>{setPrompt(originalPrompt());document.getElementById("chat-prompt")?.focus()}}/>
@@ -314,7 +314,7 @@ function Workspace(){
         onCode={source?()=>switchTab("code"):undefined}
         onPreview={draftPreview?()=>switchTab("preview"):undefined}/>
       <div ref={bottom}/></div>
-      <div className="chat-compose-area">{wallet&&wallet.available_units<100&&<div className="capability-warning">可用积分不足；已有预览、版本和导出仍可使用。</div>}{cap?.guardrails?.daily_budget_reached&&<div className="capability-warning"><span>今日公共体验额度已达上限；当前项目预览、源码编辑和导出仍正常可用。</span><button type="button" className="plain-button" onClick={openWalletDialog}>输入体验码</button></div>}{!cap?.model_configured&&<div className="capability-warning"><AlertCircle size={15}/><span>模型待配置，连接后即可生成应用。</span></div>}{cap?.read_only&&<div className="capability-warning">系统维护中，当前只读。</div>}{error&&<div className="inline-error" role="alert">{error}<button aria-label="关闭错误" onClick={()=>setError("")}><X size={13}/></button></div>}
+      <div className="chat-compose-area">{wallet&&wallet.available_units<1_000_000&&<div className="capability-warning">可用积分不足；已有预览、版本和导出仍可使用。</div>}{cap?.guardrails?.daily_budget_reached&&<div className="capability-warning"><span>今日公共体验额度已达上限；当前项目预览、源码编辑和导出仍正常可用。</span><button type="button" className="plain-button" onClick={openWalletDialog}>输入体验码</button></div>}{!cap?.model_configured&&<div className="capability-warning"><AlertCircle size={15}/><span>模型待配置，连接后即可生成应用。</span></div>}{cap?.read_only&&<div className="capability-warning">系统维护中，当前只读。</div>}{error&&<div className="inline-error" role="alert">{error}<button aria-label="关闭错误" onClick={()=>setError("")}><X size={13}/></button></div>}
       <form className="chat-composer" onSubmit={submit}>
         <label className="sr-only" htmlFor="chat-prompt">描述需求或修改</label>
         <textarea id="chat-prompt" placeholder={project?.current_version_id?"描述下一步修改…":"详细描述你想创建的应用…"} maxLength={100000} value={prompt} onChange={e=>setPrompt(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&(e.ctrlKey||e.metaKey)){e.preventDefault();e.currentTarget.form?.requestSubmit()}}}/>
@@ -322,7 +322,7 @@ function Workspace(){
           <span>{busy?(stopping?"正在停止构建…":"构建期间可以离开此页面"):project?.current_version_id?"基于当前版本继续构建":"准备好，就开始吧"}{!busy&&prompt.length>0&&<span className="prompt-length">{prompt.length} / 100000 字</span>}</span>
           {busy?<button type="button" className="stop-build-button" aria-label="停止构建" title="停止当前项目的构建" disabled={stopping} onClick={()=>void stopRun()}>
             {stopping?<LoaderCircle size={16} className="spin" aria-hidden="true"/>:<Square size={12} fill="currentColor" aria-hidden="true"/>}
-          </button>:<button type="submit" aria-label="提交需求" disabled={!prompt.trim()||sending||savingSource||(wallet?.available_units??0)<100||!cap?.model_configured||!cap?.worker_available||cap?.read_only}>
+          </button>:<button type="submit" aria-label="提交需求" disabled={!prompt.trim()||sending||savingSource||(wallet?.available_units??0)<1_000_000||!cap?.model_configured||!cap?.worker_available||cap?.read_only}>
             {sending?<LoaderCircle size={16} className="spin"/>:<ArrowUp size={18}/>}
           </button>}
         </div>

@@ -4,7 +4,8 @@ import re
 import secrets
 import time
 
-from atoms.billing.credits import INPUT_RATE, OUTPUT_RATE, CreditError, amount, ensure_wallet, require_balance
+from atoms.billing.amounts import amount
+from atoms.billing.credits import CreditError, ensure_wallet, model_cost_units, require_balance
 from atoms.core.config import settings
 from atoms.core.db import add_event, all_rows, compact, execute, maintenance, one, transaction
 from atoms.core.security import COOKIE, client_ip, digest, enforce_rate_limit, error, origin_check, uid
@@ -586,7 +587,7 @@ def run_inspector(conn, rid: str, owner: str) -> dict:
     call_rows = all_rows(
         conn,
         """SELECT m.attempt,m.status,m.dispatch_pending,m.input_tokens,m.output_tokens,m.reserved_units,
-        m.error_code,m.created_at,m.settled_at,l.amount_units AS ledger_amount_units
+        m.error_code,m.created_at,m.settled_at,m.whole_credit_billing,l.amount_units AS ledger_amount_units
         FROM model_calls m
         LEFT JOIN credit_ledger l ON l.call_id=m.id AND l.kind='consumption'
         WHERE m.run_id=:id ORDER BY m.attempt ASC""",
@@ -602,7 +603,7 @@ def run_inspector(conn, rid: str, owner: str) -> dict:
         if row["ledger_amount_units"] is not None:
             settled_units = -int(row["ledger_amount_units"])
         elif row["status"] == "settled":
-            settled_units = in_tok * INPUT_RATE + out_tok * OUTPUT_RATE
+            settled_units = model_cost_units(in_tok, out_tok, whole_credits=bool(row["whole_credit_billing"]))
         else:
             settled_units = 0
         if row["status"] == "settled":
@@ -631,7 +632,7 @@ def run_inspector(conn, rid: str, owner: str) -> dict:
     media_rows = all_rows(
         conn,
         """SELECT m.id,m.purpose,m.status,m.estimated_provider_credits,m.actual_provider_credits,
-        m.credit_price_cny,m.reserved_units,m.error_code,l.amount_units AS ledger_amount_units
+        m.credit_price_cny,m.reserved_units,m.error_code,m.whole_credit_billing,l.amount_units AS ledger_amount_units
         FROM media_calls m
         LEFT JOIN credit_ledger l ON l.media_call_id=m.id AND l.kind IN ('consumption','media_consumption')
         WHERE m.run_id=:id OR m.active_run_id=:id ORDER BY m.created_at ASC""",
@@ -644,7 +645,7 @@ def run_inspector(conn, rid: str, owner: str) -> dict:
         elif row["status"] == "settled" and row["actual_provider_credits"] is not None:
             from atoms.billing import media_credits
 
-            settled_units = media_credits.convert(row["actual_provider_credits"], row["credit_price_cny"])
+            settled_units = media_credits.call_cost_units(row, row["actual_provider_credits"])
         else:
             settled_units = 0
         if row["status"] == "settled":

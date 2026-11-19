@@ -12,7 +12,7 @@ test("一句话资讯网站经过模型改写，保留搜索与收藏交互", as
   const preview = await createWebsite(page, "生成一个新闻网站");
   await expect(preview.getByRole("button", {name:/街巷/})).toBeVisible();
   await page.getByRole("button", {name:"积分余额",exact:true}).filter({visible:true}).click();
-  await expect(page.getByTestId("wallet-available")).toHaveText("499.888000");
+  await expect(page.getByTestId("wallet-available")).toHaveText("48");
   await page.getByRole("button", {name:"关闭",exact:true}).click();
   await expect(preview.getByText("示例内容", {exact:true})).toBeVisible();
   await expect(preview.getByRole("heading", {name:"发布速览"})).toBeVisible();

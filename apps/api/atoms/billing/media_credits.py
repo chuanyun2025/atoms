@@ -1,9 +1,10 @@
 """At-cost media metering in the existing platform wallet, without token fabrication."""
 
 import time
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal
 
-from atoms.billing.credits import SCALE, CreditError, amount, wallet
+from atoms.billing.amounts import SCALE, amount
+from atoms.billing.credits import CreditError, wallet
 from atoms.billing.passcodes import (
     authorize_paid_action,
     hold_passcode_units,
@@ -21,12 +22,15 @@ LEGACY_Q4_RATES = {"540p": 9, "720p": 19, "1080p": 24, "2K": 38, "4K": 78}
 PLATFORM_CREDITS_PER_YUAN = 10
 
 
-def convert(provider_credits, price):
-    return int(
-        (Decimal(provider_credits) * Decimal(price) * PLATFORM_CREDITS_PER_YUAN * SCALE).quantize(
-            Decimal(1), rounding=ROUND_HALF_UP
-        )
-    )
+def convert(provider_credits, price, *, whole_credits=True):
+    exact_credits = Decimal(provider_credits) * Decimal(price) * PLATFORM_CREDITS_PER_YUAN
+    if whole_credits:
+        return int(exact_credits.to_integral_value(rounding=ROUND_CEILING)) * SCALE
+    return int((exact_credits * SCALE).to_integral_value(rounding=ROUND_HALF_UP))
+
+
+def call_cost_units(call, provider_credits):
+    return convert(provider_credits, call["credit_price_cny"], whole_credits=bool(call["whole_credit_billing"]))
 
 
 def estimated_usage(model, resolution, duration):
@@ -56,8 +60,8 @@ def reserve(conn, run_id, owner, purpose, provider_credits):
     execute(
         conn,
         """INSERT INTO media_calls(id,visitor_id,run_id,active_run_id,purpose,status,reserved_units,
-        estimated_provider_credits,credit_price_cny,passcode_id,created_at)
-        VALUES(:id,:owner,:run,:run,:purpose,'reserved',:held,:estimate,:price,:passcode,:now)""",
+        estimated_provider_credits,credit_price_cny,passcode_id,created_at,whole_credit_billing)
+        VALUES(:id,:owner,:run,:run,:purpose,'reserved',:held,:estimate,:price,:passcode,:now,1)""",
         id=call_id,
         owner=owner,
         run=run_id,
@@ -122,7 +126,7 @@ def settle(conn, call_id, provider_credits):
     if type(provider_credits) is not int or provider_credits < 0:
         execute(conn, "UPDATE media_calls SET status='uncertain',error_code='MISSING_USAGE' WHERE id=:id", id=call_id)
         return
-    cost = convert(provider_credits, row["credit_price_cny"])
+    cost = call_cost_units(row, provider_credits)
     if cost > row["reserved_units"]:
         execute(
             conn,

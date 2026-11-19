@@ -39,18 +39,18 @@ def test_public_daily_budget_atomic_concurrency_and_graceful_degradation(client,
     _enable_worker()
     validator(monkeypatch, [VALIDATION])
 
-    # Deliver an existing project version first (consumes fixture usage = 1200*20 + 400*80 = 56,000 units = 0.056 credits).
+    # Deliver an existing project version first (fixture consumes 1 call -> 1 credit = 1,000,000 units).
     proj_existing = create_project(client)
     res_ok = submit(client, proj_existing["id"], "做个极简计数器", request_key="init-ok-key")
     assert res_ok.status_code == 202
     run_ok = worker.claim("test-leader")
     asyncio.run(worker.execute_run(run_ok))
 
-    # Now enable public daily budget at 0.10 credits (100,000 units) -> remaining today is 44,000 units!
+    # Now enable public daily budget at 2 credits (2,000,000 units) -> remaining today is 1 credit (1,000,000 units)!
     monkeypatch.setattr(cfg, "public_budget_enabled", True)
-    monkeypatch.setattr(cfg, "public_daily_budget_credits", Decimal("0.10"))
+    monkeypatch.setattr(cfg, "public_daily_budget_credits", Decimal("2"))
 
-    # Spawn 6 concurrent runs and attempt to reserve >=25,000 units each in parallel threads -> at most 1 can succeed!
+    # Spawn 6 concurrent runs and attempt to reserve 1 credit each in parallel threads -> at most 1 can succeed!
     runs = []
     for idx in range(6):
         p = client.post("/api/v1/projects", json={"client_key": f"conc-proj-{idx:02d}", "title": f"并发{idx}"}).json()
@@ -68,7 +68,7 @@ def test_public_daily_budget_atomic_concurrency_and_graceful_degradation(client,
 
     def attempt_reserve(run_row):
         try:
-            # Minimum required = 1200 * 20 + 1 * 80 = 24,080 units; provider max = 300 -> clamped to 44,000 units!
+            # Minimum required = 1 credit (1,000,000 units) -> only 1 of 6 can succeed!
             return reserve_call(run_row, 1, 1200, 300)
         except CreditError as exc:
             return exc.code
@@ -80,8 +80,8 @@ def test_public_daily_budget_atomic_concurrency_and_graceful_degradation(client,
     rejected = [item for item in outcomes if item == "PUBLIC_DAILY_BUDGET_REACHED"]
     assert len(reserved) == 1
     assert len(rejected) == 5
-    # Settled (56,000) + held (reserved[0]['reserved_units']) never breaches 100,000 units!
-    assert 56_000 + reserved[0]["reserved_units"] <= 100_000
+    # Settled (1,000,000) + held (reserved[0]['reserved_units']) never breaches 2,000,000 units!
+    assert 1_000_000 + reserved[0]["reserved_units"] <= 2_000_000
 
     # New anonymous run submission immediately gets 429 PUBLIC_DAILY_BUDGET_REACHED without creating a dangling run.
     blocked_proj = client.post("/api/v1/projects", json={"client_key": "blocked-proj-01", "title": "被熔断"}).json()
@@ -115,10 +115,11 @@ def test_passcode_cli_redemption_video_unlock_and_revocation(client, monkeypatch
     monkeypatch.setattr(
         sys,
         "argv",
-        ["ops", "passcode-create", "--label", "面试官体验码", "--credits", "50", "--max-visitors", "1"],
+        ["ops", "passcode-create", "--label", "面试官体验码", "--credits", "50.01", "--max-visitors", "1"],
     )
     ops.main()
     created = json.loads(capsys.readouterr().out.strip())
+    assert created["budget"] == "50.01" and created["budget_units"] == 50_010_000
     raw_code = created["code"]
     passcode_id = created["id"]
 
@@ -152,6 +153,8 @@ def test_passcode_cli_redemption_video_unlock_and_revocation(client, monkeypatch
     assert guard["daily_budget_reached"] is False
     assert guard["video_unlocked"] is True
     assert guard["passcode"]["label"] == "面试官体验码"
+    assert guard["passcode"]["remaining"] == "50.01"
+    assert redeem_res.json()["available"] == "50.01"
 
     # Second visitor cannot exceed max_visitors=1
     with TestClient(app, base_url="http://localhost:8080") as second:
@@ -193,6 +196,7 @@ def test_passcode_cli_redemption_video_unlock_and_revocation(client, monkeypatch
     ops.main()
     listed = json.loads(capsys.readouterr().out)["items"]
     assert listed[0]["id"] == passcode_id
+    assert listed[0]["budget"] == "50.01"
     assert Decimal(listed[0]["spent"]) > 0
     assert Decimal(listed[0]["held"]) > 0
 
@@ -244,7 +248,7 @@ def test_non_exempt_passcode_and_cross_day_holds_count_toward_public_budget(clie
 
     start_call(call)
     settle_call(call, 1000, 100, "req-non-exempt")
-    expected_settled = 1000 * 20 + 100 * 80
+    expected_settled = 1_000_000
     with transaction() as conn:
         used_after_settle, _, _ = public_daily_usage_units(conn, now_ts)
     assert used_after_settle == expected_settled

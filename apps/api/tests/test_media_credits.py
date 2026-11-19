@@ -41,19 +41,19 @@ def test_text_only_video_needs_no_image_and_uses_shared_wallet(client):
     ).json()
     quote = client.get("/api/v1/video/quote?duration=5").json()
     assert quote == {
-        "credits": "14.062500",
-        "required_units": 14_062_500,
+        "credits": "15",
+        "required_units": 15_000_000,
         "model": "viduq3-pro",
         "resolution": "540p",
         "duration": 5,
     }
     assert start(client, project).status_code == 202
-    assert client.get("/api/v1/wallet").json()["held"] == "14.062500"
+    assert client.get("/api/v1/wallet").json()["held"] == "15"
     run = worker.claim("test-leader")
     assert job_for(run)["input_mode"] == "text"
     asyncio.run(worker.execute_run(run))
     wallet = client.get("/api/v1/wallet").json()
-    assert (wallet["balance"], wallet["held"], wallet["spent"]) == ("485.937500", "0.000000", "14.062500")
+    assert (wallet["balance"], wallet["held"], wallet["spent"]) == ("35", "0", "15")
     ledger = client.get("/api/v1/wallet/transactions").json()
     assert ledger["pending"] == []
     assert ledger["items"][0]["kind"] == "media_consumption"
@@ -110,7 +110,7 @@ def test_partial_actual_cost_and_purchase_price_snapshot(client, monkeypatch):
     video.call_change(run, job["video_call_id"], "settle", 36)
     video.call_change(run, job["video_call_id"], "settle", None)
     wallet = client.get("/api/v1/wallet").json()
-    assert (wallet["balance"], wallet["held"], wallet["spent"]) == ("488.750000", "0.000000", "11.250000")
+    assert (wallet["balance"], wallet["held"], wallet["spent"]) == ("38", "0", "12")
     assert (
         len(
             [
@@ -132,7 +132,7 @@ def test_insufficient_balance_rolls_back_run_and_reservation(client):
     with transaction() as conn:
         assert all_rows(conn, "SELECT * FROM runs") == []
         assert all_rows(conn, "SELECT * FROM media_calls") == []
-    assert client.get("/api/v1/wallet").json()["held"] == "0.000000"
+    assert client.get("/api/v1/wallet").json()["held"] == "0"
 
 
 @pytest.mark.parametrize("mode", ["rejected", "generation_failed", "uncertain"])
@@ -157,8 +157,8 @@ def test_failure_release_or_hold_matches_provider_certainty(client, monkeypatch,
         asyncio.run(worker.execute_run(run))
     worker.fail(run, caught.value.code, str(caught.value))
     wallet = client.get("/api/v1/wallet").json()
-    assert wallet["balance"] == "500.000000"
-    assert wallet["held"] == ("14.062500" if mode == "uncertain" else "0.000000")
+    assert wallet["balance"] == "50"
+    assert wallet["held"] == ("15" if mode == "uncertain" else "0")
     assert len([request for request in requests if request.method == "POST"]) == 1
     if mode == "uncertain":
         assert start(client, project, retry_of_run_id=run["id"]).status_code == 409
@@ -189,19 +189,33 @@ def test_paid_success_survives_download_failure_and_retry_does_not_charge_twice(
     with pytest.raises(ModelError) as caught:
         asyncio.run(worker.execute_run(run))
     worker.fail(run, caught.value.code, str(caught.value))
-    assert client.get("/api/v1/wallet").json()["spent"] == "14.062500"
+    assert client.get("/api/v1/wallet").json()["spent"] == "15"
     assert start(client, project, retry_of_run_id=run["id"]).status_code == 202
-    assert client.get("/api/v1/wallet").json()["held"] == "0.000000"
+    assert client.get("/api/v1/wallet").json()["held"] == "0"
     monkeypatch.setattr(video, "download_video", good_download)
     asyncio.run(worker.execute_run(worker.claim("test-leader")))
     assert calls == ["POST", "GET", "GET"]
-    assert client.get("/api/v1/wallet").json()["spent"] == "14.062500"
+    assert client.get("/api/v1/wallet").json()["spent"] == "15"
     assert client.get(f"/api/v1/projects/{project['id']}").json()["current_version_id"]
 
 
-def test_missing_usage_delivers_video_but_requires_explicit_reconciliation(client, monkeypatch):
+@pytest.mark.parametrize(
+    ("legacy", "reserved_units", "charged"),
+    [(False, 15_000_000, "15"), (True, 14_062_500, "14.0625")],
+)
+def test_missing_usage_delivers_video_but_requires_explicit_reconciliation(
+    client, monkeypatch, legacy, reserved_units, charged
+):
     project, _ = project_and_image(client)
     assert start(client, project).status_code == 202
+    if legacy:
+        with transaction(True) as conn:
+            execute(
+                conn,
+                "UPDATE media_calls SET whole_credit_billing=0, reserved_units=:hold",
+                hold=reserved_units,
+            )
+            execute(conn, "UPDATE credit_wallets SET held_units=:hold", hold=reserved_units)
 
     def handler(request):
         return httpx.Response(
@@ -217,10 +231,16 @@ def test_missing_usage_delivers_video_but_requires_explicit_reconciliation(clien
     assert client.get(f"/api/v1/projects/{project['id']}").json()["current_version_id"]
     pending = client.get("/api/v1/wallet/transactions").json()["pending"]
     assert pending[0]["category"] == "media" and pending[0]["status"] == "uncertain"
-    assert client.get("/api/v1/wallet").json()["spent"] == "0.000000"
+    assert pending[0]["reserved_units"] == reserved_units
+    assert pending[0]["reserved"] == charged
+    assert client.get("/api/v1/wallet").json()["spent"] == "0"
     monkeypatch.setattr(sys, "argv", ["ops", "media-reconcile", pending[0]["id"], "--provider-credits", "45"])
     ops.main()
-    assert client.get("/api/v1/wallet").json()["spent"] == "14.062500"
+    wallet = client.get("/api/v1/wallet").json()
+    assert (wallet["spent"], wallet["held"]) == (charged, "0")
+    ledger = client.get("/api/v1/wallet/transactions").json()
+    assert [item["amount"] for item in ledger["items"] if item["kind"] == "media_consumption"] == ["-" + charged]
+    assert client.get(f"/api/v1/runs/{run['id']}/inspector").json()["billing"]["total_settled_credits"] == charged
     with pytest.raises(ValueError):
         ops.main()
 
@@ -233,14 +253,14 @@ def test_unstarted_run_releases_hold_and_duplicate_request_reserves_once(client)
     run = worker.claim("test-leader")
     worker.fail(run, "STOPPED", "执行前终止")
     wallet = client.get("/api/v1/wallet").json()
-    assert wallet["held"] == "0.000000" and wallet["spent"] == "0.000000"
+    assert wallet["held"] == "0" and wallet["spent"] == "0"
 
 
 def test_two_projects_share_available_balance_without_overspending(client):
     first, _ = project_and_image(client)
     second = client.post("/api/v1/projects", json={"kind": "video", "client_key": "another-video-project"}).json()
     with transaction(True) as conn:
-        execute(conn, "UPDATE credit_wallets SET balance_units=15000000")
+        execute(conn, "UPDATE credit_wallets SET balance_units=16000000")
     assert start(client, first).status_code == 202
     response = client.post(
         f"/api/v1/projects/{second['id']}/runs",
@@ -248,4 +268,4 @@ def test_two_projects_share_available_balance_without_overspending(client):
         headers={"Idempotency-Key": "second-project-request"},
     )
     assert response.status_code == 402
-    assert client.get("/api/v1/wallet").json()["available"] == "0.937500"
+    assert client.get("/api/v1/wallet").json()["available"] == "1"

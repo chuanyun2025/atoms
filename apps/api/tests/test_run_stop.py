@@ -105,7 +105,7 @@ def test_stop_between_reservation_and_dispatch_releases_hold(client, monkeypatch
     with transaction() as conn:
         assert one(conn, "SELECT status FROM model_calls WHERE run_id=:id", id=run["id"])["status"] == "released"
     wallet = client.get("/api/v1/wallet").json()
-    assert wallet["held_units"] == 0 and wallet["spent"] == "0.000000"
+    assert wallet["held_units"] == 0 and wallet["spent"] == "0"
 
 
 def test_cancel_as_reservation_returns_skips_start_call_and_releases_hold(client, monkeypatch):
@@ -152,7 +152,7 @@ def test_cancel_as_reservation_returns_skips_start_call_and_releases_hold(client
     with transaction() as conn:
         assert one(conn, "SELECT status FROM model_calls WHERE run_id=:id", id=run["id"])["status"] == "released"
     wallet = client.get("/api/v1/wallet").json()
-    assert wallet["held_units"] == 0 and wallet["spent"] == "0.000000"
+    assert wallet["held_units"] == 0 and wallet["spent"] == "0"
 
 
 def test_cancel_immediately_after_sync_start_call_marks_interrupted(client, monkeypatch):
@@ -220,4 +220,4 @@ def test_stop_during_settlement_preserves_known_usage(client, monkeypatch):
         call = one(conn, "SELECT status,provider_request_id FROM model_calls WHERE run_id=:id", id=run["id"])
         assert call == {"status": "settled", "provider_request_id": "known-usage"}
     wallet = client.get("/api/v1/wallet").json()
-    assert wallet["held_units"] == 0 and wallet["spent"] == "0.000100"
+    assert wallet["held_units"] == 0 and wallet["spent"] == "1"

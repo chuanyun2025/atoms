@@ -47,18 +47,18 @@ describe("WalletButton and ledger modal", () => {
         return new Response(
           JSON.stringify({
             visitor_id: "vis_demo_123",
-            balance: "499.944000",
-            held: "12.500000",
-            available: "487.444000",
-            spent: "0.056000",
-            available_units: 487_444_000,
-            welcome_credits: 500,
+            balance: "49",
+            held: "13",
+            available: "36",
+            spent: "1",
+            available_units: 36_000_000,
+            welcome_credits: 50,
             credits_per_yuan: 10,
             pricing: {input_per_million: 20, output_per_million: 80},
             guardrails: {
               daily_budget_enabled: true,
-              daily_budget_credits: "1000.000000",
-              daily_remaining_credits: "0.000000",
+              daily_budget_credits: "1000",
+              daily_remaining_credits: "0",
               daily_budget_reached: !redeemed,
               reset_at: 1763481600,
               reset_label: "2026-11-18 00:00 (Asia/Shanghai)",
@@ -69,10 +69,10 @@ describe("WalletButton and ledger modal", () => {
                     id: "pc_1",
                     label: "面试官专属",
                     status: "active",
-                    budget: "100.000000",
-                    spent: "0.000000",
-                    held: "0.000000",
-                    remaining: "100.000000",
+                    budget: "100",
+                    spent: "0",
+                    held: "0",
+                    remaining: "100",
                     remaining_units: 100_000_000,
                     bypass_daily_budget: true,
                     allow_video: true,
@@ -90,7 +90,7 @@ describe("WalletButton and ledger modal", () => {
             {
               id: "led_1",
               kind: "consumption",
-              amount: "-0.056000",
+              amount: "-1",
               input_tokens: 1200,
               output_tokens: 400,
               created_at: 1763000000,
@@ -100,7 +100,7 @@ describe("WalletButton and ledger modal", () => {
             {
               id: "call_uncertain_1",
               status: "uncertain",
-              reserved: "12.500000",
+              reserved: "13",
               created_at: 1763000100,
               error_code: "MODEL_NETWORK",
             },
@@ -122,7 +122,7 @@ describe("WalletButton and ledger modal", () => {
       await new Promise(resolve => setTimeout(resolve, 20));
     });
 
-    expect(container.querySelector('[data-testid="credit-balance"]')?.textContent).toBe("487.444");
+    expect(container.querySelector('[data-testid="credit-balance"]')?.textContent).toBe("36");
 
     await act(async () => {
       container.querySelector(".wallet-button")?.dispatchEvent(new MouseEvent("click", {bubbles: true}));
@@ -134,6 +134,8 @@ describe("WalletButton and ledger modal", () => {
     const dialog = document.body.querySelector('[role="dialog"]');
     expect(dialog).not.toBeNull();
     expect(dialog?.querySelector('[data-testid="visitor-id"]')?.textContent).toBe("vis_demo_123");
+    expect(dialog?.textContent).toContain("新用户赠送 50 积分");
+    expect(dialog?.textContent).toContain("50 积分相当于 5 元使用额度");
     expect(dialog?.textContent).toContain("待核对用量");
     expect(dialog?.textContent).toContain("call_uncertain_1");
     expect(dialog?.textContent).toContain("模型用量消费");

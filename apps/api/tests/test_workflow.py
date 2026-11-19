@@ -110,7 +110,7 @@ def test_idempotency_without_charging_before_a_model_call(client):
         assert one(conn, "SELECT COUNT(*) n FROM messages")["n"] == 1
         assert one(conn, "SELECT COUNT(*) n FROM quota_windows")["n"] == 0
         assert one(conn, "SELECT COUNT(*) n FROM credit_ledger WHERE kind='welcome'")["n"] == 1
-        assert one(conn, "SELECT balance_units FROM credit_wallets")["balance_units"] == 500_000_000
+        assert one(conn, "SELECT balance_units FROM credit_wallets")["balance_units"] == 50_000_000
 
 
 def test_completed_request_replays_before_stale_revision_check(client):

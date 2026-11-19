@@ -58,7 +58,7 @@ test("不上传图片也能生成 Q3 视频，按实际费用扣平台积分",as
   const form=page.getByRole("form",{name:"视频生成设置"});
   await expect(form.getByRole("status")).toContainText("请先描述");
   await expect(form).toContainText("可选，不上传也能直接生成");
-  await expect(form).toContainText("14.0625 积分");
+  await expect(form).toContainText("15 积分");
   await form.getByLabel("描述你想生成的视频").fill("金毛在夕阳下的海边奔跑，镜头缓缓后退。");
   await expect(form.getByRole("button",{name:"生成视频",exact:true})).toBeEnabled();
   const requestPromise=page.waitForRequest(request=>request.method()==="POST"&&request.url().endsWith("/runs"));
@@ -67,10 +67,10 @@ test("不上传图片也能生成 Q3 视频，按实际费用扣平台积分",as
   expect(body.video).toEqual({duration:5,audio:true});
   await expect(page.getByLabel("生成的视频",{exact:true})).toBeVisible();
   await expect(page.getByLabel("生成的视频",{exact:true})).not.toHaveAttribute("poster",/./);
-  await expect(page.getByRole("button",{name:"积分余额",exact:true}).getByTestId("credit-balance")).toHaveText("485.9375");
+  await expect(page.getByRole("button",{name:"积分余额",exact:true}).getByTestId("credit-balance")).toHaveText("35");
   await page.getByRole("button",{name:"积分余额",exact:true}).click();
   await expect(page.getByRole("dialog")).toContainText("视频生成消费");
-  await expect(page.getByRole("dialog")).toContainText("-14.062500");
+  await expect(page.getByRole("dialog")).toContainText("-15");
   await page.screenshot({path:"test-results/vidu-text-video-credits.png"});
 });
 
@@ -79,7 +79,7 @@ test("参考图片可以移除，费用和积分不足原因明确可见",async(
   page.on("request",request=>{if(request.method()==="POST"&&request.url().endsWith("/runs"))paid.push(request.url())});
   await page.route("**/api/v1/wallet",async route=>{
     const response=await route.fetch();
-    await route.fulfill({response,json:{...await response.json(),available:"1.000000",available_units:1000000}});
+    await route.fulfill({response,json:{...await response.json(),available:"1",available_units:1000000}});
   });
   await page.goto("/video");
   const form=page.getByRole("form",{name:"视频生成设置"});
@@ -91,6 +91,6 @@ test("参考图片可以移除，费用和积分不足原因明确可见",async(
   await expect(form.getByRole("status")).toContainText("可用积分不足");
   await expect(form.getByRole("button",{name:"生成视频",exact:true})).toBeDisabled();
   await form.getByRole("combobox",{name:"视频时长"}).selectOption("1");
-  await expect(form).toContainText("2.8125 积分");
+  await expect(form).toContainText("3 积分");
   expect(paid).toEqual([]);
 });

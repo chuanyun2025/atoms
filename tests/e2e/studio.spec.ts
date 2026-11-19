@@ -26,7 +26,7 @@ test("首页按需求识别类型、入口草稿和无需生成的作品预览",
   await page.emulateMedia({reducedMotion:"reduce"});
   await expect(prompt(page)).toHaveAttribute("placeholder",stable!);
   await page.getByRole("button",{name:"积分余额",exact:true}).filter({visible:true}).click();
-  await expect(page.getByTestId("wallet-available")).toHaveText("500.000000");
+  await expect(page.getByTestId("wallet-available")).toHaveText("50");
   await page.getByRole("button",{name:"关闭",exact:true}).click();
 
   const cards=page.locator(".example-card-v2 img");
@@ -82,8 +82,8 @@ test("首页按需求识别类型、入口草稿和无需生成的作品预览",
   await expect(prompt(page)).toBeFocused();
   await expect(prompt(page)).toHaveValue(/深圳三日旅游规划/);
   await page.getByRole("button",{name:"积分余额",exact:true}).filter({visible:true}).click();
-  await expect(page.getByTestId("wallet-available")).toHaveText("500.000000");
-  await expect(page.getByText("新用户赠送 500 积分", {exact:true})).toHaveCount(1);
+  await expect(page.getByTestId("wallet-available")).toHaveText("50");
+  await expect(page.getByText("新用户赠送 50 积分", {exact:true})).toHaveCount(1);
   await expect(page.getByText(/输入 .* · 输出 .* token/)).toHaveCount(0);
   await page.getByRole("button",{name:"关闭",exact:true}).click();
   expect(writes).toEqual([]);

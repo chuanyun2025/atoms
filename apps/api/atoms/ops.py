@@ -19,8 +19,19 @@ from atoms.domains.media import asset_path
 
 DISPATCH_SCHEMA = "0011_model_call_dispatch"
 INDEX_SCHEMA = "0012_query_indexes"
-CURRENT_SCHEMA = "0013_public_budget_and_passcodes"
-SUPPORTED_SCHEMAS = {"0007", "0008", "0009", "0009_publish", "0010", DISPATCH_SCHEMA, INDEX_SCHEMA, CURRENT_SCHEMA}
+PASSCODE_SCHEMA = "0013_public_budget_and_passcodes"
+CURRENT_SCHEMA = "0014_whole_credit_billing"
+SUPPORTED_SCHEMAS = {
+    "0007",
+    "0008",
+    "0009",
+    "0009_publish",
+    "0010",
+    DISPATCH_SCHEMA,
+    INDEX_SCHEMA,
+    PASSCODE_SCHEMA,
+    CURRENT_SCHEMA,
+}
 
 
 def database_path():
@@ -129,7 +140,7 @@ def main():
             else:
                 if (
                     args.provider_credits < 0
-                    or media_credits.convert(args.provider_credits, call["credit_price_cny"]) > call["reserved_units"]
+                    or media_credits.call_cost_units(call, args.provider_credits) > call["reserved_units"]
                 ):
                     raise ValueError("账单用量无效或超出已授权金额，请人工核对")
                 media_credits.settle(conn, args.call_id, args.provider_credits)
@@ -209,9 +220,9 @@ def main():
         )
         if report["schema"] != "0007":
             target.execute("UPDATE worker_status SET video_configured=0,text_model=NULL")
-        if report["schema"] in {"0009", "0010", DISPATCH_SCHEMA, CURRENT_SCHEMA}:
+        if report["schema"] in {"0009", "0010", DISPATCH_SCHEMA, PASSCODE_SCHEMA, CURRENT_SCHEMA}:
             target.execute("UPDATE run_workspace SET compiled_json=NULL,digest=NULL")
-        if report["schema"] in {DISPATCH_SCHEMA, CURRENT_SCHEMA}:
+        if report["schema"] in {DISPATCH_SCHEMA, PASSCODE_SCHEMA, CURRENT_SCHEMA}:
             now = time.time()
             pending = target.execute("""SELECT id,visitor_id,run_id,reserved_units FROM model_calls
                 WHERE status='in_flight' AND dispatch_pending=1""").fetchall()

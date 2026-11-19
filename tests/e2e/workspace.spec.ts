@@ -19,9 +19,9 @@ test("构建时显示计划，交付后可查看正式预览与源码",async({pa
 test("生成、持久化、失败恢复、历史分支与导出",async({page,browser})=>{
   await page.goto("/");
   await page.getByRole("button",{name:"积分余额",exact:true}).filter({visible:true}).click();
-  await expect(page.getByTestId("wallet-available")).toHaveText("500.000000");
+  await expect(page.getByTestId("wallet-available")).toHaveText("50");
   await expect(page.getByTestId("visitor-id")).toHaveText(/^[a-f0-9]{32}$/);
-  await expect(page.getByText("新用户赠送 500 积分",{exact:true})).toBeVisible();
+  await expect(page.getByText("新用户赠送 50 积分",{exact:true})).toBeVisible();
   await page.getByRole("button",{name:"关闭",exact:true}).click();
   await page.getByLabel("描述应用需求").fill("创建一个可以保存数据的计数器");
   await page.getByRole("button",{name:"开始创建",exact:true}).click();
@@ -33,7 +33,7 @@ test("生成、持久化、失败恢复、历史分支与导出",async({page,bro
   await expect(preview.getByRole("button",{name:"增加一次"})).toBeVisible();
   const firstExport=await page.getByRole("link",{name:"导出源码"}).getAttribute("href");
   await page.getByRole("button",{name:"积分余额",exact:true}).filter({visible:true}).click();
-  await expect(page.getByTestId("wallet-available")).toHaveText("499.888000");
+  await expect(page.getByTestId("wallet-available")).toHaveText("48");
   await expect(page.getByText("输入 1,200 · 输出 400 token",{exact:true})).toHaveCount(2);
   await page.getByRole("button",{name:"关闭",exact:true}).click();
   await preview.getByRole("button",{name:"增加一次"}).click();
@@ -92,7 +92,7 @@ test("生成、持久化、失败恢复、历史分支与导出",async({page,bro
   await expect(page.getByRole("button",{name:"v4",exact:true})).toBeVisible();
   await expect(preview.getByRole("button",{name:"增加两次"})).toBeVisible();
   await page.getByRole("button",{name:"积分余额",exact:true}).filter({visible:true}).click();
-  await expect(page.getByTestId("wallet-available")).toHaveText("499.272000");
+  await expect(page.getByTestId("wallet-available")).toHaveText("37");
   await page.screenshot({path:"test-results/wallet-desktop.png",fullPage:true});
   await page.getByRole("button",{name:"关闭",exact:true}).click();
   const downloadEvent=page.waitForEvent("download");

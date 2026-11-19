@@ -43,7 +43,7 @@ test("标准 cite 标签自动兼容，首次生成直接交付",async({page})=>
   await expect(preview.locator("#save")).toHaveText("已保存");
   await expect(page.getByTestId("build-failure")).toHaveCount(0);
   await page.getByRole("button",{name:"积分余额",exact:true}).filter({visible:true}).click();
-  await expect(page.getByTestId("wallet-available")).toHaveText("499.888000");
+  await expect(page.getByTestId("wallet-available")).toHaveText("48");
 });
 
 test("不同根因可以修复到第十轮并在原任务交付",async({page})=>{
@@ -94,7 +94,7 @@ test("失败后保留内容、一键继续修复、原生 datalist 与积分结�
   await page.reload();
   await expect(card.getByRole("button",{name:"继续修复",exact:true})).toBeEnabled();
   await page.getByRole("button",{name:"积分余额",exact:true}).filter({visible:true}).click();
-  await expect(page.getByTestId("wallet-available")).toHaveText("499.776000");
+  await expect(page.getByTestId("wallet-available")).toHaveText("46");
   await page.getByRole("button",{name:"关闭",exact:true}).click();
   await page.screenshot({path:"test-results/recoverable-failure.png",fullPage:true});
   const accepted=page.waitForResponse(r=>r.url().endsWith("/runs")&&r.request().method()==="POST"&&r.status()===202);
@@ -111,7 +111,7 @@ test("失败后保留内容、一键继续修复、原生 datalist 与积分结�
   await preview.getByRole("button",{name:"增加一次"}).click();
   await expect(preview.locator("#save")).toHaveText("已保存");
   await page.getByRole("button",{name:"积分余额",exact:true}).filter({visible:true}).click();
-  await expect(page.getByTestId("wallet-available")).toHaveText("499.664000");
+  await expect(page.getByTestId("wallet-available")).toHaveText("44");
   await page.getByRole("button",{name:"关闭",exact:true}).click();
   await page.screenshot({path:"test-results/repaired-application.png",fullPage:true});
 });

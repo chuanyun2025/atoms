@@ -19,7 +19,8 @@ from alembic import command
 from alembic.config import Config
 
 from atoms import PACKAGE_ROOT, REPO_ROOT
-from atoms.billing.credits import INPUT_RATE, OUTPUT_RATE, SCALE, amount, ensure_wallet
+from atoms.billing.amounts import SCALE, amount
+from atoms.billing.credits import ensure_wallet
 from atoms.core import config as core_config
 from atoms.core import db as core_db
 from atoms.core.schemas import ProjectCreate, RunCreate
@@ -135,8 +136,8 @@ def _summarize_group(case_results: list[dict[str, Any]]) -> dict[str, Any]:
             "avg_elapsed_seconds": 0.0,
             "p50_elapsed_seconds": 0.0,
             "p95_elapsed_seconds": 0.0,
-            "avg_credits": "0.000000",
-            "total_credits": "0.000000",
+            "avg_credits": "0",
+            "total_credits": "0",
             "total_input_tokens": 0,
             "total_output_tokens": 0,
             "diagnostic_distribution": {},
@@ -375,7 +376,10 @@ async def run_eval_suite(
                         )
                         calls = core_db.all_rows(
                             conn,
-                            "SELECT status,input_tokens,output_tokens FROM model_calls WHERE run_id=:id ORDER BY attempt",
+                            """SELECT m.status,m.input_tokens,m.output_tokens,l.amount_units
+                            FROM model_calls m
+                            LEFT JOIN credit_ledger l ON l.call_id=m.id AND l.kind='consumption'
+                            WHERE m.run_id=:id ORDER BY m.attempt""",
                             id=claimed["id"],
                         )
 
@@ -420,7 +424,7 @@ async def run_eval_suite(
 
                     in_tok = sum(int(c["input_tokens"] or 0) for c in calls if c["status"] == "settled")
                     out_tok = sum(int(c["output_tokens"] or 0) for c in calls if c["status"] == "settled")
-                    settled_units = in_tok * INPUT_RATE + out_tok * OUTPUT_RATE
+                    settled_units = -sum(int(c["amount_units"] or 0) for c in calls if c["status"] == "settled")
 
                     case_results.append(
                         {
@@ -629,7 +633,7 @@ def render_comparison_markdown(baseline: dict[str, Any], candidate: dict[str, An
         f"| 最终交付成功率 | {_pct(b_sum['delivery_rate'])} | {_pct(c_sum['delivery_rate'])} | {_signed_pp(d['delta_delivery_rate'])} |",
         f"| 平均修复轮次 | {b_sum['avg_repair_rounds']:.2f} | {c_sum['avg_repair_rounds']:.2f} | {d['delta_avg_repair_rounds']:+.2f} |",
         f"| 平均耗时 (s) | {b_sum['avg_elapsed_seconds']:.2f} | {c_sum['avg_elapsed_seconds']:.2f} | {d['delta_avg_elapsed_seconds']:+.2f}s |",
-        f"| 平均积分成本 | {b_sum['avg_credits']} | {c_sum['avg_credits']} | {d['delta_avg_credits']:+.6f} |",
+        f"| 平均积分成本 | {b_sum['avg_credits']} | {c_sum['avg_credits']} | {d['delta_avg_credits']:+g} |",
         "",
         "## 分类交付与修复对比",
         "",
